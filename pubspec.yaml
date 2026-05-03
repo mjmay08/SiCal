@@ -10,6 +10,9 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
+  flutter_rust_bridge: 2.12.0
+  sical_rust:
+    path: rust_builder
 
 dev_dependencies:
   flutter_test:
