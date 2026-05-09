@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'services/auth_service.dart';
+import 'ui/screens/onboarding_screen.dart';
+import 'ui/screens/welcome_screen.dart';
 
 class SiCalApp extends StatelessWidget {
   const SiCalApp({super.key});
@@ -12,14 +17,23 @@ class SiCalApp extends StatelessWidget {
         colorSchemeSeed: const Color(0xFF1ED660),
         useMaterial3: true,
       ),
-      home: const Scaffold(
-        body: Center(
-          child: Text(
-            'SiCal',
-            style: TextStyle(fontSize: 32, fontWeight: FontWeight.w700),
-          ),
-        ),
-      ),
+      home: const _StartupGate(),
+    );
+  }
+}
+
+class _StartupGate extends ConsumerWidget {
+  const _StartupGate();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authStateProvider);
+    return authState.when(
+      data: (isConnected) =>
+          isConnected ? const WelcomeScreen() : const OnboardingScreen(),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
+      error: (_, __) => const OnboardingScreen(),
     );
   }
 }
