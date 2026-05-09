@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../bridge/sia_bridge.dart';
 import '../../services/auth_service.dart';
-import 'welcome_screen.dart';
+import 'calendar_screen.dart';
 
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
@@ -242,8 +242,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             ),
             const SizedBox(height: 24),
             FilledButton(
-              onPressed: _goToWelcome,
-              child: const Text('Continue'),
+              onPressed: _goToCalendar,
+              child: const Text('Open Calendar'),
             ),
           ],
         ],
@@ -301,10 +301,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
   }
 
-  void _goToWelcome() {
+  void _goToCalendar() {
     ref.invalidate(authStateProvider);
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const WelcomeScreen()),
+      MaterialPageRoute(builder: (_) => const CalendarScreen()),
       (_) => false,
     );
   }
