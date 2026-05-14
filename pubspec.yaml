@@ -18,6 +18,8 @@ dependencies:
   flutter_secure_storage: ^10.0.0
   url_launcher: ^6.3.2
   table_calendar: ^3.2.0
+  file_selector: ^1.1.0
+  icalendar_parser: ^2.1.0
   sqlite3: ^2.9.4
   sqlite3_flutter_libs: ^0.5.42
   path_provider: ^2.1.5

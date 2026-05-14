@@ -24,6 +24,27 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/calendar" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="*/*" android:pathPattern=".*\\.ics" />
+                <data android:scheme="content" android:mimeType="*/*" android:pathPattern=".*\\.ical" />
+                <data android:scheme="content" android:mimeType="*/*" android:pathPattern=".*\\.ifb" />
+                <data android:scheme="content" android:mimeType="*/*" android:pathPattern=".*\\.vcs" />
+                <data android:scheme="file" android:mimeType="*/*" android:pathPattern=".*\\.ics" />
+                <data android:scheme="file" android:mimeType="*/*" android:pathPattern=".*\\.ical" />
+                <data android:scheme="file" android:mimeType="*/*" android:pathPattern=".*\\.ifb" />
+                <data android:scheme="file" android:mimeType="*/*" android:pathPattern=".*\\.vcs" />
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

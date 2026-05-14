@@ -4,6 +4,7 @@ import '../../bridge/sia_bridge.dart';
 import '../../database/database.dart';
 import '../../repositories/calendar_repository.dart';
 import '../../services/auth_service.dart';
+import '../../services/ics_import_service.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -32,6 +33,12 @@ class SettingsScreen extends ConsumerWidget {
           const Divider(),
           _SectionHeader('Calendar'),
           _CalendarNameTile(),
+          ListTile(
+            leading: const Icon(Icons.upload_file),
+            title: const Text('Import Calendar File'),
+            subtitle: const Text('Supports .ics, .ical, .ifb, and .vcs'),
+            onTap: () => _importIcsFile(context, ref),
+          ),
           const Divider(),
           _SectionHeader('Data'),
           ListTile(
@@ -84,6 +91,23 @@ class SettingsScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _importIcsFile(BuildContext context, WidgetRef ref) async {
+    try {
+      final repository = await ref.read(calendarRepositoryProvider.future);
+      final importer = IcsImportService(repository);
+      final result = await importer.importFromPicker();
+      if (result == null || !context.mounted) return;
+
+      ref.invalidate(eventsForDayProvider);
+      Navigator.of(context).pop(result.importedCount > 0);
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Import failed: $e')));
+    }
   }
 
   void _confirmClearData(BuildContext context, WidgetRef ref) {
