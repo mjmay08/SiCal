@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:table_calendar/table_calendar.dart';
 import '../../repositories/calendar_repository.dart';
+import '../../services/calendar_file_open_service.dart';
+import '../../services/incoming_calendar_intent_handler.dart';
 import '../../models/event.dart';
 import '../widgets/sync_status_banner.dart';
 import 'event_detail_screen.dart';
@@ -27,6 +29,15 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
     _selectedDay = _focusedDay;
     // Load events for the initial month so markers appear immediately.
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadVisibleEvents());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      CalendarFileOpenService.instance.setListener(_importIncomingCalendarText);
+    });
+  }
+
+  @override
+  void dispose() {
+    CalendarFileOpenService.instance.clearListener();
+    super.dispose();
   }
 
   /// Normalise to midnight for event-day lookup.
@@ -70,9 +81,20 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.settings),
-            onPressed: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
+            onPressed: () async {
+              final didChange = await Navigator.of(context).push<bool>(
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
+              if (didChange == true) {
+                ref.invalidate(eventsForDayProvider);
+                _loadVisibleEvents();
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Import complete')),
+                  );
+                }
+              }
+            },
           ),
         ],
       ),
@@ -193,6 +215,28 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
         context,
       ).showSnackBar(const SnackBar(content: Text('Sync complete')));
     }
+  }
+
+  void _importIncomingCalendarText(String text) {
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    ref.read(calendarRepositoryProvider.future).then((repository) {
+      return handleIncomingCalendarText(
+        navigator: navigator,
+        messenger: messenger,
+        repository: repository,
+        text: text,
+        onImported: () {
+          ref.invalidate(eventsForDayProvider);
+          _loadVisibleEvents();
+        },
+      );
+    }).catchError((e) {
+      if (!messenger.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not import calendar file: $e')),
+      );
+    });
   }
 }
 
