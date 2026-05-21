@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `get_sdk`, `pending_lock`, `sdk_lock`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `PendingOnboarding`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `OnboardingState`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 /// Returns the current shard upload progress (current, total).
@@ -17,14 +17,19 @@ ShardProgressInfo getShardProgress() =>
 
 /// Request a new app connection with the indexer.
 /// Returns an approval URL the user must open in a browser.
-/// Internally spawns a background task that holds the Builder and waits for
-/// approval. Call [register_with_phrase] after the user approves.
+/// After showing the URL, call [wait_for_approval]. If that fails with a
+/// network error, call this again to get a fresh URL and retry.
 Future<String> requestConnection() =>
     RustLib.instance.api.crateApiRequestConnection();
 
-/// Complete registration after the user has approved the app.
-/// Sends the recovery phrase to the background task started by
-/// [request_connection] and returns the hex-encoded App Key.
+/// Waits for the user to approve the connection in the browser.
+/// Returns Ok(()) when approved. Returns Err on network failure or expiry —
+/// in that case call [request_connection] again to get a fresh URL and retry.
+Future<void> waitForApproval() =>
+    RustLib.instance.api.crateApiWaitForApproval();
+
+/// Complete registration after [wait_for_approval] succeeds.
+/// Returns the hex-encoded App Key.
 Future<String> registerWithPhrase({required String recoveryPhrase}) => RustLib
     .instance
     .api

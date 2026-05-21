@@ -21,6 +21,8 @@ class SiaBridge {
 
   static Future<String> requestConnection() => rust.requestConnection();
 
+  static Future<void> waitForApproval() => rust.waitForApproval();
+
   static Future<String> registerWithPhrase(String recoveryPhrase) =>
       rust.registerWithPhrase(recoveryPhrase: recoveryPhrase);
 

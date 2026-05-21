@@ -1,5 +1,7 @@
+import 'dart:developer' as dev;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_custom_tabs/flutter_custom_tabs.dart' as custom_tabs;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../bridge/sia_bridge.dart';
@@ -18,6 +20,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   String? _recoveryPhrase;
   bool _phraseConfirmed = false;
   bool _isConnecting = false;
+  bool _awaitingApproval = false;
+  bool _approvalCallActive =
+      false; // guard against concurrent waitForApproval calls
+  String _connectingSubtitle = '';
+  String? _pendingApprovalUrl;
   final _phraseController = TextEditingController();
 
   @override
@@ -216,7 +223,38 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          if (_isConnecting) ...[
+          if (_awaitingApproval) ...[
+            Icon(
+              Icons.open_in_browser,
+              size: 64,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'Approve in Browser',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'A secure browser tab opened for you to approve the connection.\n'
+              'Once you have approved, come back here and tap Continue.',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _completeRegistration,
+              icon: const Icon(Icons.check),
+              label: const Text("I've Approved — Continue"),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _pendingApprovalUrl == null
+                  ? null
+                  : () => _openApprovalPage(_pendingApprovalUrl!),
+              icon: const Icon(Icons.open_in_browser),
+              label: const Text('Reopen Approval Page'),
+            ),
+          ] else if (_isConnecting) ...[
             const CircularProgressIndicator(),
             const SizedBox(height: 24),
             Text(
@@ -224,11 +262,17 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 8),
-            const Text(
-              'A browser window will open for you to approve the app.\n'
-              'Once approved, registration will complete automatically.',
-              textAlign: TextAlign.center,
-            ),
+            Text(_connectingSubtitle, textAlign: TextAlign.center),
+            if (_connectingSubtitle.contains('Checking')) ...[
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: () => setState(() {
+                  _isConnecting = false;
+                  _awaitingApproval = true;
+                }),
+                child: const Text("Not approved yet — go back"),
+              ),
+            ],
           ] else ...[
             Icon(
               Icons.check_circle,
@@ -272,24 +316,26 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
     try {
       // 1. Request app connection — returns an approval URL.
+      setState(
+        () => _connectingSubtitle =
+            'Opening a secure browser tab for approval...',
+      );
       final approvalUrl = await SiaBridge.requestConnection();
+      _pendingApprovalUrl = approvalUrl;
 
-      // 2. Open the approval URL for the user to authorize.
-      final uri = Uri.parse(approvalUrl);
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      // 2. Open the approval URL in a Custom Tab / SFSafariViewController.
+      //    This keeps the user "in-app".
+      await _openApprovalPage(approvalUrl);
 
-      // 3. Complete registration — blocks until user approves, then registers.
-      final appKeyHex = await SiaBridge.registerWithPhrase(_recoveryPhrase!);
-
-      // 4. Persist only the App Key for future sessions.
-      final auth = ref.read(authServiceProvider);
-      await auth.storeAppKey(appKeyHex);
-
-      // Keep the recovery phrase transient (never persisted by the app).
-      _recoveryPhrase = null;
-      _phraseController.clear();
-
-      setState(() => _isConnecting = false);
+      // 3. Tab has been closed — show "I've Approved" button so the user can
+      //    explicitly trigger the approval poll while the app is foregrounded.
+      //    waitForApproval() must NOT be called while in the background.
+      if (mounted) {
+        setState(() {
+          _isConnecting = false;
+          _awaitingApproval = true;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _isConnecting = false);
@@ -298,6 +344,136 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         ).showSnackBar(SnackBar(content: Text('Connection failed: $e')));
         _goToPage(1);
       }
+    }
+  }
+
+  Future<void> _completeRegistration() async {
+    if (_approvalCallActive) {
+      dev.log(
+        '[Onboarding] _completeRegistration: skipped — call already in progress',
+        name: 'Onboarding',
+      );
+      return;
+    }
+    _approvalCallActive = true;
+    dev.log('[Onboarding] _completeRegistration: started', name: 'Onboarding');
+
+    setState(() {
+      _awaitingApproval = false;
+      _isConnecting = true;
+      _connectingSubtitle = 'Checking approval status...';
+    });
+
+    try {
+      // Poll the approval status — app is foregrounded, network is available.
+      dev.log('[Onboarding] calling waitForApproval()', name: 'Onboarding');
+      await SiaBridge.waitForApproval();
+      dev.log('[Onboarding] waitForApproval() succeeded', name: 'Onboarding');
+
+      final appKeyHex = await SiaBridge.registerWithPhrase(_recoveryPhrase!);
+      dev.log(
+        '[Onboarding] registerWithPhrase() succeeded',
+        name: 'Onboarding',
+      );
+
+      // Registration is complete — SDK is live. Clear sensitive data.
+      _recoveryPhrase = null;
+      _phraseController.clear();
+      // NOTE: keep _approvalCallActive = true until the UI is fully updated
+      // below so that a stray tap of "I've Approved" can't start a new call.
+
+      // Persist the key. A failure here is non-fatal for the current session
+      // (SDK is already connected) but the user will need to reconnect next
+      // launch if we can't save it.
+      try {
+        dev.log('[Onboarding] calling storeAppKey()', name: 'Onboarding');
+        final auth = ref.read(authServiceProvider);
+        await auth.storeAppKey(appKeyHex);
+        dev.log('[Onboarding] storeAppKey() succeeded', name: 'Onboarding');
+      } catch (storeErr, st) {
+        dev.log(
+          '[Onboarding] storeAppKey() FAILED: $storeErr',
+          name: 'Onboarding',
+          error: storeErr,
+          stackTrace: st,
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Connected, but your key could not be saved. '
+                'You may need to reconnect after restarting the app.',
+              ),
+              duration: Duration(seconds: 6),
+            ),
+          );
+        }
+      }
+
+      // Update UI — clear both flags so we land on the "Connected!" view.
+      if (mounted) {
+        setState(() {
+          _isConnecting = false;
+          _awaitingApproval = false;
+        });
+      }
+      _approvalCallActive = false;
+    } catch (e, st) {
+      dev.log(
+        '[Onboarding] _completeRegistration failed: $e',
+        name: 'Onboarding',
+        error: e,
+        stackTrace: st,
+      );
+      _approvalCallActive = false;
+      if (mounted) {
+        // The Rust state was consumed by waitForApproval/registerWithPhrase —
+        // the user cannot retry the approval button. Navigate back to the
+        // choice page so they can restart from request_connection().
+        setState(() {
+          _isConnecting = false;
+          _awaitingApproval = false;
+          _pendingApprovalUrl = null;
+        });
+        _goToPage(1);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_approvalErrorMessage(e))));
+      }
+    }
+  }
+
+  /// Returns a user-friendly message for errors thrown by waitForApproval().
+  String _approvalErrorMessage(Object e) {
+    final raw = e.toString();
+    if (raw.contains('wait_for_approval')) {
+      return 'Approval was not confirmed. Please tap Connect and try again.';
+    }
+    if (raw.contains('no pending onboarding') ||
+        raw.contains('not yet approved')) {
+      return 'Something went wrong. Please tap Connect and try again.';
+    }
+    return 'Registration failed. Please tap Connect and try again.';
+  }
+
+  Future<void> _openApprovalPage(String approvalUrl) async {
+    final uri = Uri.parse(approvalUrl);
+    try {
+      await custom_tabs.launchUrl(
+        uri,
+        customTabsOptions: const custom_tabs.CustomTabsOptions(
+          showTitle: true,
+          shareState: custom_tabs.CustomTabsShareState.off,
+          urlBarHidingEnabled: true,
+        ),
+        safariVCOptions: const custom_tabs.SafariViewControllerOptions(
+          barCollapsingEnabled: true,
+          entersReaderIfAvailable: false,
+        ),
+      );
+    } catch (_) {
+      // Fallback if Custom Tabs / SFSafariViewController is unavailable.
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 

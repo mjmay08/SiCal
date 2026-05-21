@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 2117917453;
+  int get rustContentHash => -2026650338;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -118,6 +118,8 @@ abstract class RustLibApi extends BaseApi {
   });
 
   void crateApiValidatePhrase({required String phrase});
+
+  Future<void> crateApiWaitForApproval();
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -533,6 +535,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiValidatePhraseConstMeta =>
       const TaskConstMeta(debugName: "validate_phrase", argNames: ["phrase"]);
+
+  @override
+  Future<void> crateApiWaitForApproval() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 15,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiWaitForApprovalConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWaitForApprovalConstMeta =>
+      const TaskConstMeta(debugName: "wait_for_approval", argNames: []);
 
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {

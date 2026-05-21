@@ -4,15 +4,16 @@ use flutter_rust_bridge::frb;
 use serde::{Deserialize, Serialize};
 use sia_storage::{
     app_id, generate_recovery_phrase as sia_generate_recovery_phrase,
-    validate_recovery_phrase, AppKey, AppMetadata, Builder, DownloadOptions,
-    Hash256, Object, ObjectsCursor, UploadOptions, Sdk,
+    validate_recovery_phrase, AppKey, AppMetadata, ApprovedState, Builder,
+    DownloadOptions, Hash256, Object, ObjectsCursor, RequestingApprovalState,
+    UploadOptions, Sdk,
 };
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::io::AsyncReadExt;
-use tokio::sync::{oneshot, Mutex as TokioMutex};
+use tokio::sync::Mutex as TokioMutex;
 
 // ---------------------------------------------------------------------------
 // App identity — generate your App ID once and never change it.
@@ -70,17 +71,17 @@ async fn get_sdk() -> Result<Sdk> {
 }
 
 // ---------------------------------------------------------------------------
-// Onboarding state — bridges the split request_connection / register flow
+// Onboarding state — explicit three-step flow: request → approve → register
 // ---------------------------------------------------------------------------
 
-struct PendingOnboarding {
-    phrase_tx: oneshot::Sender<String>,
-    result_rx: oneshot::Receiver<Result<String>>,
+enum OnboardingState {
+    AwaitingApproval(Builder<RequestingApprovalState>),
+    AwaitingPhrase(Builder<ApprovedState>),
 }
 
-static PENDING: OnceLock<TokioMutex<Option<PendingOnboarding>>> = OnceLock::new();
+static PENDING: OnceLock<TokioMutex<Option<OnboardingState>>> = OnceLock::new();
 
-fn pending_lock() -> &'static TokioMutex<Option<PendingOnboarding>> {
+fn pending_lock() -> &'static TokioMutex<Option<OnboardingState>> {
     PENDING.get_or_init(|| TokioMutex::new(None))
 }
 
@@ -122,8 +123,8 @@ pub struct UploadItem {
 
 /// Request a new app connection with the indexer.
 /// Returns an approval URL the user must open in a browser.
-/// Internally spawns a background task that holds the Builder and waits for
-/// approval. Call [register_with_phrase] after the user approves.
+/// After showing the URL, call [wait_for_approval]. If that fails with a
+/// network error, call this again to get a fresh URL and retry.
 pub async fn request_connection() -> Result<String> {
     let builder = Builder::new(INDEXER_URL, APP_META)
         .map_err(|e| anyhow!("builder: {e}"))?;
@@ -133,65 +134,88 @@ pub async fn request_connection() -> Result<String> {
         .map_err(|e| anyhow!("request_connection: {e}"))?;
 
     let url = builder.response_url().to_string();
+    pending_lock()
+        .lock()
+        .await
+        .replace(OnboardingState::AwaitingApproval(builder));
+    Ok(url)
+}
 
-    let (phrase_tx, phrase_rx) = oneshot::channel::<String>();
-    let (result_tx, result_rx) = oneshot::channel::<Result<String>>();
+/// Waits for the user to approve the connection in the browser.
+/// Returns Ok(()) when approved. Returns Err on network failure or expiry —
+/// in that case call [request_connection] again to get a fresh URL and retry.
+pub async fn wait_for_approval() -> Result<()> {
+    eprintln!("[SiaBridge/Rust] wait_for_approval: called");
+    let state = pending_lock()
+        .lock()
+        .await
+        .take();
 
-    // Spawn a task that waits for approval, then registers when given a phrase.
-    tokio::spawn(async move {
-        let outcome = async {
-            let builder = builder
-                .wait_for_approval()
-                .await
-                .map_err(|e| anyhow!("wait_for_approval: {e}"))?;
-
-            let phrase = phrase_rx
-                .await
-                .map_err(|_| anyhow!("onboarding cancelled"))?;
-
-            let sdk = builder
-                .register(&phrase)
-                .await
-                .map_err(|e| anyhow!("register: {e}"))?;
-
-            let app_key_hex = hex::encode(sdk.app_key().export());
-
-            // Store the SDK for later use.
-            sdk_lock().lock().await.replace(sdk);
-
-            Ok(app_key_hex)
-        }
-        .await;
-        let _ = result_tx.send(outcome);
+    eprintln!("[SiaBridge/Rust] wait_for_approval: state after take = {}", match &state {
+        Some(OnboardingState::AwaitingApproval(_)) => "AwaitingApproval",
+        Some(OnboardingState::AwaitingPhrase(_)) => "AwaitingPhrase",
+        None => "None",
     });
+
+    let state = state.ok_or_else(|| anyhow!("no pending onboarding — call request_connection() first"))?;
+
+    let builder = match state {
+        OnboardingState::AwaitingApproval(b) => b,
+        already_approved @ OnboardingState::AwaitingPhrase(_) => {
+            // Already approved; put the state back and return success.
+            eprintln!("[SiaBridge/Rust] wait_for_approval: already in AwaitingPhrase, returning Ok");
+            pending_lock().lock().await.replace(already_approved);
+            return Ok(());
+        }
+    };
+
+    eprintln!("[SiaBridge/Rust] wait_for_approval: polling builder.wait_for_approval()");
+    let approved = match builder.wait_for_approval().await {
+        Ok(a) => {
+            eprintln!("[SiaBridge/Rust] wait_for_approval: approved!");
+            a
+        }
+        Err(e) => {
+            eprintln!("[SiaBridge/Rust] wait_for_approval: poll failed: {e}");
+            // builder is consumed by wait_for_approval(self) — cannot restore.
+            // Caller must restart from request_connection().
+            return Err(anyhow!("wait_for_approval: {e}"));
+        }
+    };
 
     pending_lock()
         .lock()
         .await
-        .replace(PendingOnboarding { phrase_tx, result_rx });
-
-    Ok(url)
+        .replace(OnboardingState::AwaitingPhrase(approved));
+    Ok(())
 }
 
-/// Complete registration after the user has approved the app.
-/// Sends the recovery phrase to the background task started by
-/// [request_connection] and returns the hex-encoded App Key.
+/// Complete registration after [wait_for_approval] succeeds.
+/// Returns the hex-encoded App Key.
 pub async fn register_with_phrase(recovery_phrase: String) -> Result<String> {
-    let handle = pending_lock()
+    let state = pending_lock()
         .lock()
         .await
         .take()
         .ok_or_else(|| anyhow!("no pending onboarding — call request_connection() first"))?;
 
-    handle
-        .phrase_tx
-        .send(recovery_phrase)
-        .map_err(|_| anyhow!("onboarding background task died"))?;
+    let builder = match state {
+        OnboardingState::AwaitingPhrase(b) => b,
+        OnboardingState::AwaitingApproval(_) => {
+            return Err(anyhow!(
+                "not yet approved — call wait_for_approval() first"
+            ));
+        }
+    };
 
-    handle
-        .result_rx
+    let sdk = builder
+        .register(&recovery_phrase)
         .await
-        .map_err(|_| anyhow!("onboarding background task died"))?
+        .map_err(|e| anyhow!("register: {e}"))?;
+
+    let app_key_hex = hex::encode(sdk.app_key().export());
+    sdk_lock().lock().await.replace(sdk);
+    Ok(app_key_hex)
 }
 
 /// Generate a new BIP-39 12-word recovery phrase.
