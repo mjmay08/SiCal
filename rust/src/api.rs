@@ -22,11 +22,11 @@ use tokio::sync::Mutex as TokioMutex;
 const INDEXER_URL: &str = "https://sia.storage";
 
 const APP_META: AppMetadata = AppMetadata {
-    id: app_id!("e3a1f8c6d4b2097531a6e8f4c2d0b7a5e3f1c6d4b209753100000000ca1eda40"),
+    id: app_id!("e3a1f8c6d4b2097531a6e8f4c2d0b7a5e3f1c6d4b209753100000000ca1eda42"),
     name: "SiCal",
     description: "Decentralized calendar powered by the Sia network",
     service_url: "https://github.com/mjmay08/SiCal",
-    logo_url: None,
+    logo_url: "https://raw.githubusercontent.com/mjmay08/SiCal/refs/heads/main/assets/icon.png",
     callback_url: None,
 };
 
