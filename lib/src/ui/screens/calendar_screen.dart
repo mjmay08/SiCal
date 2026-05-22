@@ -46,13 +46,32 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
 
   /// Load all visible events for the current month into the marker map.
   Future<void> _loadVisibleEvents() async {
-    final first = DateTime(_focusedDay.year, _focusedDay.month, 1);
-    final last = DateTime(_focusedDay.year, _focusedDay.month + 1, 0, 23, 59);
+    // Extend the query window by ±1 day at both ends so that events whose
+    // stored wall-clock time falls outside the month boundary (because they
+    // are stored in UTC but displayed in a behind-UTC device timezone) still
+    // appear on the correct day.
+    final first = DateTime(
+      _focusedDay.year,
+      _focusedDay.month,
+      1,
+    ).subtract(const Duration(days: 1));
+    final last = DateTime(
+      _focusedDay.year,
+      _focusedDay.month + 1,
+      0,
+      23,
+      59,
+    ).add(const Duration(days: 1));
     final repo = await ref.read(calendarRepositoryProvider.future);
     final events = repo.getEventsInRange(first, last);
+    // Await the first emission so we never bucket events with a null timezone.
+    String? deviceTz;
+    try {
+      deviceTz = await ref.read(deviceTimezoneProvider.future);
+    } catch (_) {}
     final map = <DateTime, List<CalendarEvent>>{};
     for (final e in events) {
-      final day = _normalizeDay(e.start);
+      final day = _normalizeDay(effectiveDisplayStart(e, deviceTz));
       (map[day] ??= []).add(e);
     }
     if (mounted) setState(() => _eventsByDay = map);
@@ -60,6 +79,12 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Reload markers whenever the device timezone changes (e.g. app resume
+    // in a different timezone).
+    ref.listen<AsyncValue<String>>(deviceTimezoneProvider, (prev, next) {
+      if (next.hasValue && next.value != prev?.value) _loadVisibleEvents();
+    });
+
     final eventsAsync = ref.watch(
       eventsForDayProvider(_selectedDay ?? _focusedDay),
     );
