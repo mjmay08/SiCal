@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../models/event.dart';
 import '../../models/recurrence.dart';
 import '../../repositories/calendar_repository.dart';
@@ -88,14 +89,20 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
                   ? 'All day'
                   : '${_formatDateTime(start)} \u2013 ${_formatDateTime(end)}',
             ),
-            if (!event.allDay && event.timezone != null) ...[                
-              _InfoRow(
-                icon: Icons.language,
-                label: _timezoneLabel(start),
-              ),
+            if (!event.allDay && event.timezone != null) ...[
+              _InfoRow(icon: Icons.language, label: _timezoneLabel(start)),
             ],
             if (event.location.isNotEmpty)
-              _InfoRow(icon: Icons.location_on, label: event.location),
+              _InfoRow(
+                icon: Icons.location_on,
+                label: event.location,
+                onTap: _isUrl(event.location)
+                    ? () => launchUrl(
+                        Uri.parse(event.location),
+                        mode: LaunchMode.externalApplication,
+                      )
+                    : null,
+              ),
             if (_hasRecurrence)
               _InfoRow(icon: Icons.repeat, label: _recurrenceLabel),
             if (event.description.isNotEmpty) ...[
@@ -347,21 +354,38 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
   }
 }
 
+bool _isUrl(String value) =>
+    value.startsWith('http://') || value.startsWith('https://');
+
 class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label;
+  final VoidCallback? onTap;
 
-  const _InfoRow({required this.icon, required this.label});
+  const _InfoRow({required this.icon, required this.label, this.onTap});
 
   @override
   Widget build(BuildContext context) {
+    final labelWidget = onTap != null
+        ? GestureDetector(
+            onTap: onTap,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.primary,
+                decoration: TextDecoration.underline,
+              ),
+            ),
+          )
+        : Text(label);
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
           Icon(icon, size: 20, color: Theme.of(context).colorScheme.outline),
           const SizedBox(width: 12),
-          Expanded(child: Text(label)),
+          Expanded(child: labelWidget),
         ],
       ),
     );
