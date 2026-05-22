@@ -24,38 +24,75 @@ Future<void> handleIncomingCalendarText({
     return;
   }
 
-  final selectedDraft = parsed.drafts.length == 1
-      ? parsed.drafts.first
-      : await _pickIncomingDraft(navigator.context, parsed.drafts);
-  if (selectedDraft == null || !navigator.mounted) return;
-
-  final saved = await navigator.push<CalendarEvent>(
-    MaterialPageRoute(
-      builder: (_) => EventFormScreen(existingEvent: selectedDraft),
-    ),
-  );
-  if (saved == null) return;
-
-  repository.createEvent(saved);
-  onImported?.call();
-
-  if (!messenger.mounted) return;
-  var message = 'Imported 1 item';
-  if (parsed.drafts.length > 1) {
-    final remaining = parsed.drafts.length - 1;
-    message += ' ($remaining not imported)';
+  // Single event: go straight to the edit form.
+  if (parsed.drafts.length == 1) {
+    final saved = await navigator.push<CalendarEvent>(
+      MaterialPageRoute(
+        builder: (_) => EventFormScreen(existingEvent: parsed.drafts.first),
+      ),
+    );
+    if (saved == null) return;
+    repository.createEvent(saved);
+    onImported?.call();
+    if (!messenger.mounted) return;
+    var message = 'Imported 1 item';
+    if (parsed.skippedCount > 0) message += ', skipped ${parsed.skippedCount}';
+    messenger.showSnackBar(SnackBar(content: Text(message)));
+    return;
   }
-  if (parsed.skippedCount > 0) {
-    message += ', skipped ${parsed.skippedCount}';
+
+  // Multiple events: show picker with option to import all at once.
+  final choice = await _pickIncomingDraft(navigator.context, parsed.drafts);
+  if (choice == null || !navigator.mounted) return;
+
+  switch (choice) {
+    case _ImportAllChoice():
+      for (final draft in parsed.drafts) {
+        repository.createEvent(draft);
+      }
+      onImported?.call();
+      if (!messenger.mounted) return;
+      var message = 'Imported ${parsed.drafts.length} items';
+      if (parsed.skippedCount > 0)
+        message += ', skipped ${parsed.skippedCount}';
+      messenger.showSnackBar(SnackBar(content: Text(message)));
+
+    case _SingleDraftChoice(:final event):
+      final saved = await navigator.push<CalendarEvent>(
+        MaterialPageRoute(
+          builder: (_) => EventFormScreen(existingEvent: event),
+        ),
+      );
+      if (saved == null) return;
+      repository.createEvent(saved);
+      onImported?.call();
+      if (!messenger.mounted) return;
+      final remaining = parsed.drafts.length - 1;
+      var singleMessage = 'Imported 1 item ($remaining not imported)';
+      if (parsed.skippedCount > 0)
+        singleMessage += ', skipped ${parsed.skippedCount}';
+      messenger.showSnackBar(SnackBar(content: Text(singleMessage)));
   }
-  messenger.showSnackBar(SnackBar(content: Text(message)));
 }
 
-Future<CalendarEvent?> _pickIncomingDraft(
+sealed class _DraftChoice {
+  const _DraftChoice();
+}
+
+final class _SingleDraftChoice extends _DraftChoice {
+  final CalendarEvent event;
+  _SingleDraftChoice(this.event);
+}
+
+final class _ImportAllChoice extends _DraftChoice {
+  const _ImportAllChoice();
+}
+
+Future<_DraftChoice?> _pickIncomingDraft(
   BuildContext context,
   List<CalendarEvent> drafts,
 ) {
-  return showDialog<CalendarEvent>(
+  return showDialog<_DraftChoice>(
     context: context,
     builder: (ctx) => AlertDialog(
       title: const Text('Choose Event to Import'),
@@ -70,7 +107,7 @@ Future<CalendarEvent?> _pickIncomingDraft(
             return ListTile(
               title: Text(event.title),
               subtitle: Text(_incomingDraftSubtitle(context, event)),
-              onTap: () => Navigator.of(ctx).pop(event),
+              onTap: () => Navigator.of(ctx).pop(_SingleDraftChoice(event)),
             );
           },
         ),
@@ -79,6 +116,10 @@ Future<CalendarEvent?> _pickIncomingDraft(
         TextButton(
           onPressed: () => Navigator.of(ctx).pop(),
           child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(const _ImportAllChoice()),
+          child: Text('Import All (${drafts.length})'),
         ),
       ],
     ),

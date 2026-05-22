@@ -17,7 +17,8 @@ class FakeCalendarRepository implements CalendarRepository {
   }
 
   @override
-  CalendarEvent? getMasterEvent(String masterEventId) => masterEvents[masterEventId];
+  CalendarEvent? getMasterEvent(String masterEventId) =>
+      masterEvents[masterEventId];
 
   @override
   String getCalendarTimezone() => 'UTC';
@@ -61,50 +62,55 @@ END:VCALENDAR
 ''';
 
 void main() {
-  testWidgets('opens Edit Event with prefilled data for a single incoming event', (
-    tester,
-  ) async {
-    final repo = FakeCalendarRepository();
-    late BuildContext hostContext;
+  testWidgets(
+    'opens Edit Event with prefilled data for a single incoming event',
+    (tester) async {
+      final repo = FakeCalendarRepository();
+      late BuildContext hostContext;
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Builder(
-            builder: (context) {
-              hostContext = context;
-              return const SizedBox.shrink();
-            },
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) {
+                hostContext = context;
+                return const SizedBox.shrink();
+              },
+            ),
           ),
         ),
-      ),
-    );
+      );
 
-    final navigator = Navigator.of(hostContext);
-    final messenger = ScaffoldMessenger.of(hostContext);
+      final navigator = Navigator.of(hostContext);
+      final messenger = ScaffoldMessenger.of(hostContext);
 
-    final future = handleIncomingCalendarText(
-      navigator: navigator,
-      messenger: messenger,
-      repository: repo,
-      text: _singleEventIcs,
-    );
-    await tester.pumpAndSettle();
+      final future = handleIncomingCalendarText(
+        navigator: navigator,
+        messenger: messenger,
+        repository: repo,
+        text: _singleEventIcs,
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.text('Edit Event'), findsOneWidget);
-    expect(
-      tester.widgetList<EditableText>(find.byType(EditableText)).first.controller.text,
-      'Planning Session',
-    );
+      expect(find.text('Edit Event'), findsOneWidget);
+      expect(
+        tester
+            .widgetList<EditableText>(find.byType(EditableText))
+            .first
+            .controller
+            .text,
+        'Planning Session',
+      );
 
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    await future;
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      await future;
 
-    expect(repo.savedEvents, hasLength(1));
-    expect(repo.savedEvents.single.title, 'Planning Session');
-    expect(repo.savedEvents.single.location, 'Room 12');
-  });
+      expect(repo.savedEvents, hasLength(1));
+      expect(repo.savedEvents.single.title, 'Planning Session');
+      expect(repo.savedEvents.single.location, 'Room 12');
+    },
+  );
 
   testWidgets('shows a chooser for multiple incoming events', (tester) async {
     final repo = FakeCalendarRepository();
@@ -143,7 +149,11 @@ void main() {
 
     expect(find.text('Edit Event'), findsOneWidget);
     expect(
-      tester.widgetList<EditableText>(find.byType(EditableText)).first.controller.text,
+      tester
+          .widgetList<EditableText>(find.byType(EditableText))
+          .first
+          .controller
+          .text,
       'Design Review',
     );
 
@@ -153,5 +163,54 @@ void main() {
 
     expect(repo.savedEvents, hasLength(1));
     expect(repo.savedEvents.single.title, 'Design Review');
+  });
+
+  testWidgets('Import All button saves every event without the edit form', (
+    tester,
+  ) async {
+    final repo = FakeCalendarRepository();
+    late BuildContext hostContext;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) {
+              hostContext = context;
+              return const SizedBox.shrink();
+            },
+          ),
+        ),
+      ),
+    );
+
+    final navigator = Navigator.of(hostContext);
+    final messenger = ScaffoldMessenger.of(hostContext);
+
+    final future = handleIncomingCalendarText(
+      navigator: navigator,
+      messenger: messenger,
+      repository: repo,
+      text: _multiEventIcs,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Choose Event to Import'), findsOneWidget);
+    expect(find.text('Import All (2)'), findsOneWidget);
+
+    await tester.tap(find.text('Import All (2)'));
+    await tester.pumpAndSettle();
+    await future;
+
+    // Both events should be saved, edit form should not have opened.
+    expect(find.text('Edit Event'), findsNothing);
+    expect(repo.savedEvents, hasLength(2));
+    expect(
+      repo.savedEvents.map((e) => e.title),
+      containsAll(['Morning Briefing', 'Design Review']),
+    );
+
+    // Snackbar should confirm the count.
+    expect(find.text('Imported 2 items'), findsOneWidget);
   });
 }

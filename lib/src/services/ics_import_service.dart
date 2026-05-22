@@ -190,7 +190,11 @@ class IcsImportService {
         continue;
       }
 
-      final imported = _calendarEventFromComponent(component, uid, calendarTimezone);
+      final imported = _calendarEventFromComponent(
+        component,
+        uid,
+        calendarTimezone,
+      );
       if (imported == null) {
         skippedCount++;
         continue;
@@ -235,6 +239,16 @@ class IcsImportService {
       );
     }
 
+    if (!ICalendar.objects.containsKey('DURATION')) {
+      ICalendar.registerField(
+        field: 'DURATION',
+        function: (value, params, _, lastEvent) {
+          lastEvent['duration'] = value;
+          return lastEvent;
+        },
+      );
+    }
+
     _customFieldsRegistered = true;
   }
 
@@ -258,7 +272,10 @@ class IcsImportService {
       } else if (startField.isUtc) {
         // Z suffix: UTC time — convert to calendar default timezone wall-clock.
         eventTimezone = calendarTimezone;
-        startDt = TimezoneService.convertUtcToTimezone(startField.dt, calendarTimezone);
+        startDt = TimezoneService.convertUtcToTimezone(
+          startField.dt,
+          calendarTimezone,
+        );
       }
       // else: neither TZID nor Z — floating event, null timezone.
     }
@@ -268,20 +285,37 @@ class IcsImportService {
     final endField = _parseIcsField(component['dtend']);
     if (endField != null) {
       if (!isAllDay && startField.isUtc && eventTimezone != null) {
-        endDt = TimezoneService.convertUtcToTimezone(endField.dt, eventTimezone);
+        endDt = TimezoneService.convertUtcToTimezone(
+          endField.dt,
+          eventTimezone,
+        );
       } else {
         endDt = endField.dt;
       }
     }
+
+    // Fall back to DURATION when DTEND is absent (RFC 5545 §3.6.1).
+    if (endDt == null) {
+      final dur = _parseDuration(component['duration'] as String?);
+      if (dur != null) endDt = startDt.add(dur);
+    }
+
     final end = _resolveEnd(start: startDt, end: endDt, isAllDay: isAllDay);
     if (end.isBefore(startDt)) return null;
+
+    final rawDescription = (component['description'] as String?)?.trim() ?? '';
+    final rawUrl = (component['url'] as String?)?.trim() ?? '';
+    final fullDescription = [
+      rawDescription,
+      rawUrl,
+    ].where((s) => s.isNotEmpty).join('\n');
 
     return CalendarEvent(
       id: _eventIdFromUid(uid),
       title: ((component['summary'] as String?)?.trim().isNotEmpty ?? false)
           ? (component['summary'] as String).trim()
           : 'Untitled event',
-      description: (component['description'] as String?)?.trim() ?? '',
+      description: fullDescription,
       start: startDt,
       end: end,
       allDay: isAllDay,
@@ -350,7 +384,9 @@ class IcsImportService {
       if (result == null) return null;
       return _IcsFieldResult(
         dt: result.$1,
-        tzid: (field.tzid != null && field.tzid!.isNotEmpty) ? field.tzid : null,
+        tzid: (field.tzid != null && field.tzid!.isNotEmpty)
+            ? field.tzid
+            : null,
         isUtc: result.$2,
       );
     }
@@ -489,6 +525,47 @@ class IcsImportService {
 
     return days.isEmpty ? null : days;
   }
+
+  /// Parses an RFC 5545 DURATION value (e.g. `PT1H30M`, `P1D`, `P1W`) into
+  /// a [Duration]. Returns null if the value is absent or malformed.
+  static Duration? _parseDuration(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    var s = raw.trim().toUpperCase();
+    // Strip optional leading sign (we don't support negative durations).
+    if (s.startsWith('+') || s.startsWith('-')) s = s.substring(1);
+    if (!s.startsWith('P')) return null;
+    s = s.substring(1); // remove 'P'
+
+    // Week-only form: nW
+    final weekMatch = RegExp(r'^(\d+)W$').firstMatch(s);
+    if (weekMatch != null) {
+      final weeks = int.tryParse(weekMatch.group(1)!);
+      return weeks != null ? Duration(days: weeks * 7) : null;
+    }
+
+    // General form: [nD][T[nH][nM][nS]]
+    final tIndex = s.indexOf('T');
+    final datePart = tIndex >= 0 ? s.substring(0, tIndex) : s;
+    final timePart = tIndex >= 0 ? s.substring(tIndex + 1) : '';
+
+    int days = 0, hours = 0, minutes = 0, seconds = 0;
+    final dayMatch = RegExp(r'(\d+)D').firstMatch(datePart);
+    if (dayMatch != null) days = int.tryParse(dayMatch.group(1)!) ?? 0;
+    final hourMatch = RegExp(r'(\d+)H').firstMatch(timePart);
+    if (hourMatch != null) hours = int.tryParse(hourMatch.group(1)!) ?? 0;
+    final minMatch = RegExp(r'(\d+)M').firstMatch(timePart);
+    if (minMatch != null) minutes = int.tryParse(minMatch.group(1)!) ?? 0;
+    final secMatch = RegExp(r'(\d+)S').firstMatch(timePart);
+    if (secMatch != null) seconds = int.tryParse(secMatch.group(1)!) ?? 0;
+
+    if (days == 0 && hours == 0 && minutes == 0 && seconds == 0) return null;
+    return Duration(
+      days: days,
+      hours: hours,
+      minutes: minutes,
+      seconds: seconds,
+    );
+  }
 }
 
 class _ImportedOverride {
@@ -530,9 +607,5 @@ class _IcsFieldResult {
   final String? tzid;
   final bool isUtc;
 
-  const _IcsFieldResult({
-    required this.dt,
-    this.tzid,
-    this.isUtc = false,
-  });
+  const _IcsFieldResult({required this.dt, this.tzid, this.isUtc = false});
 }

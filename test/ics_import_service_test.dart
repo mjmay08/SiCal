@@ -20,7 +20,8 @@ class FakeCalendarRepository implements CalendarRepository {
   }
 
   @override
-  CalendarEvent? getMasterEvent(String masterEventId) => masterEvents[masterEventId];
+  CalendarEvent? getMasterEvent(String masterEventId) =>
+      masterEvents[masterEventId];
 
   @override
   String getCalendarTimezone() => calendarTimezone;
@@ -99,6 +100,168 @@ END:VCALENDAR
       expect(allDay.allDay, isTrue);
       expect(allDay.start, DateTime(2026, 5, 13));
       expect(allDay.end, DateTime(2026, 5, 13, 23, 59));
+    });
+  });
+
+  group('IcsImportService DURATION support', () {
+    test('uses DURATION when DTEND is absent (PT1H30M)', () {
+      final service = IcsImportService(FakeCalendarRepository());
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:dur-1
+SUMMARY:Short Meeting
+DTSTART:20260521T100000
+DURATION:PT1H30M
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.drafts, hasLength(1));
+      final event = result.drafts.single;
+      expect(event.start, DateTime(2026, 5, 21, 10, 0));
+      expect(event.end, DateTime(2026, 5, 21, 11, 30));
+    });
+
+    test('uses DURATION P1D for a one-day timed event', () {
+      final service = IcsImportService(FakeCalendarRepository());
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:dur-2
+SUMMARY:Full Day Session
+DTSTART:20260521T080000
+DURATION:P1D
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.drafts, hasLength(1));
+      final event = result.drafts.single;
+      expect(event.start, DateTime(2026, 5, 21, 8, 0));
+      expect(event.end, DateTime(2026, 5, 22, 8, 0));
+    });
+
+    test('uses DURATION P1W (week)', () {
+      final service = IcsImportService(FakeCalendarRepository());
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:dur-3
+SUMMARY:Week-long Project
+DTSTART:20260521T090000
+DURATION:P1W
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.drafts, hasLength(1));
+      final event = result.drafts.single;
+      expect(event.start, DateTime(2026, 5, 21, 9, 0));
+      expect(event.end, DateTime(2026, 5, 28, 9, 0));
+    });
+
+    test('prefers DTEND over DURATION when both are present', () {
+      final service = IcsImportService(FakeCalendarRepository());
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:dur-4
+SUMMARY:Explicit End
+DTSTART:20260521T100000
+DTEND:20260521T110000
+DURATION:P1D
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.drafts, hasLength(1));
+      final event = result.drafts.single;
+      expect(event.end, DateTime(2026, 5, 21, 11, 0));
+    });
+  });
+
+  group('IcsImportService URL support', () {
+    test('appends URL to description when both are present', () {
+      final service = IcsImportService(FakeCalendarRepository());
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:url-1
+SUMMARY:Online Conference
+DESCRIPTION:Annual summit
+DTSTART:20260521T090000
+DTEND:20260521T170000
+URL:https://example.com/conference
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.drafts, hasLength(1));
+      final event = result.drafts.single;
+      expect(
+        event.description,
+        'Annual summit\nhttps://example.com/conference',
+      );
+    });
+
+    test('uses URL as description when description is absent', () {
+      final service = IcsImportService(FakeCalendarRepository());
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:url-2
+SUMMARY:Link Only
+DTSTART:20260521T090000
+DTEND:20260521T100000
+URL:https://example.com/meeting
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.drafts, hasLength(1));
+      final event = result.drafts.single;
+      expect(event.description, 'https://example.com/meeting');
+    });
+
+    test('description only when URL is absent', () {
+      final service = IcsImportService(FakeCalendarRepository());
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:url-3
+SUMMARY:No URL
+DESCRIPTION:Just a description
+DTSTART:20260521T090000
+DTEND:20260521T100000
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.drafts, hasLength(1));
+      final event = result.drafts.single;
+      expect(event.description, 'Just a description');
     });
   });
 
