@@ -446,6 +446,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   /// Returns a user-friendly message for errors thrown by waitForApproval().
   String _approvalErrorMessage(Object e) {
     final raw = e.toString();
+    if (raw.contains('maximum number of associated apps') ||
+        raw.contains('max') && raw.contains('app')) {
+      return 'This account has reached its maximum number of connected '
+          'apps. Please disconnect an existing app from sia.storage and try again.';
+    }
     if (raw.contains('wait_for_approval')) {
       return 'Approval was not confirmed. Please tap Connect and try again.';
     }
