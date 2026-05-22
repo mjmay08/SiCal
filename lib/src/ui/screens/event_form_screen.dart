@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/event.dart';
 import '../../models/recurrence.dart';
+import '../../services/timezone_service.dart';
 
 class EventFormScreen extends StatefulWidget {
   final CalendarEvent? existingEvent;
@@ -23,6 +24,7 @@ class _EventFormScreenState extends State<EventFormScreen> {
   late TimeOfDay _endTime;
   late bool _allDay;
   RecurrenceRule? _recurrenceRule;
+  String? _timezone;
 
   bool get _isEditing => widget.existingEvent != null;
 
@@ -48,11 +50,19 @@ class _EventFormScreenState extends State<EventFormScreen> {
       event?.end ?? now.add(const Duration(hours: 1)),
     );
     _allDay = event?.allDay ?? false;
+    _timezone = event?.timezone;
 
     if (event?.recurrenceRule != null && event!.recurrenceRule!.isNotEmpty) {
       try {
         _recurrenceRule = RecurrenceRule.decode(event.recurrenceRule!);
       } catch (_) {}
+    }
+
+    // For new timed events, default to device timezone.
+    if (event == null && !_allDay) {
+      TimezoneService.getDeviceTimezone().then((tz) {
+        if (mounted) setState(() => _timezone = tz);
+      });
     }
   }
 
@@ -110,6 +120,13 @@ class _EventFormScreenState extends State<EventFormScreen> {
               onDateChanged: (d) => setState(() => _endDate = d),
               onTimeChanged: (t) => setState(() => _endTime = t),
             ),
+            if (!_allDay) ...[
+              const SizedBox(height: 8),
+              _TimezoneTile(
+                timezone: _timezone,
+                onChanged: (tz) => setState(() => _timezone = tz),
+              ),
+            ],
             const SizedBox(height: 16),
             if (!_isException) ...[
               _RecurrencePicker(
@@ -178,6 +195,7 @@ class _EventFormScreenState extends State<EventFormScreen> {
           recurrenceRule: _isException
               ? widget.existingEvent!.recurrenceRule
               : _recurrenceRule?.encode(),
+          timezone: _allDay ? null : _timezone,
           isDirty: true,
         ) ??
         CalendarEvent(
@@ -188,9 +206,149 @@ class _EventFormScreenState extends State<EventFormScreen> {
           allDay: _allDay,
           location: _locationController.text.trim(),
           recurrenceRule: _recurrenceRule?.encode(),
+          timezone: _allDay ? null : _timezone,
         );
 
     Navigator.of(context).pop(event);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Timezone picker
+// ---------------------------------------------------------------------------
+
+class _TimezoneTile extends StatelessWidget {
+  final String? timezone;
+  final ValueChanged<String?> onChanged;
+
+  const _TimezoneTile({required this.timezone, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: const Icon(Icons.language),
+      title: Text(timezone ?? 'No timezone (floating)'),
+      subtitle: const Text('Timezone'),
+      trailing: const Icon(Icons.chevron_right),
+      contentPadding: EdgeInsets.zero,
+      onTap: () => _showPicker(context),
+    );
+  }
+
+  void _showPicker(BuildContext context) async {
+    final result = await showModalBottomSheet<String?>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => _TimezonePickerSheet(current: timezone),
+    );
+    // null means dismissed; _floatingTimezone means "no timezone / floating"
+    if (result == _floatingTimezone) {
+      onChanged(null);
+    } else if (result != null) {
+      onChanged(result);
+    }
+  }
+}
+
+/// Sentinel returned when the user selects "No timezone (floating)".
+const _floatingTimezone = '__floating__';
+
+class _TimezonePickerSheet extends StatefulWidget {
+  final String? current;
+  const _TimezonePickerSheet({this.current});
+
+  @override
+  State<_TimezonePickerSheet> createState() => _TimezonePickerSheetState();
+}
+
+class _TimezonePickerSheetState extends State<_TimezonePickerSheet> {
+  late final List<String> _allTimezones;
+  List<String> _filtered = [];
+  final _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _allTimezones = TimezoneService.getAllTimezones();
+    _filtered = _allTimezones;
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onSearch(String query) {
+    final lower = query.toLowerCase();
+    setState(() {
+      _filtered = lower.isEmpty
+          ? _allTimezones
+          : _allTimezones
+              .where((tz) => tz.toLowerCase().contains(lower))
+              .toList();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.75,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      builder: (context, scrollController) => SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Select Timezone',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _searchController,
+                    decoration: const InputDecoration(
+                      hintText: 'Search timezones…',
+                      prefixIcon: Icon(Icons.search),
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    onChanged: _onSearch,
+                    autofocus: true,
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                controller: scrollController,
+                itemCount: _filtered.length + 1, // +1 for floating option
+                itemBuilder: (ctx, index) {
+                  if (index == 0) {
+                    return ListTile(
+                      title: const Text('No timezone (floating)'),
+                      selected: widget.current == null,
+                      onTap: () => Navigator.pop(ctx, _floatingTimezone),
+                    );
+                  }
+                  final tz = _filtered[index - 1];
+                  return ListTile(
+                    title: Text(tz),
+                    selected: tz == widget.current,
+                    onTap: () => Navigator.pop(ctx, tz),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

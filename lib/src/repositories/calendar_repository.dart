@@ -220,4 +220,9 @@ class CalendarRepository {
   CalendarEvent? getMasterEvent(String masterEventId) {
     return _db.getEventById(masterEventId);
   }
+
+  /// Returns the calendar's default IANA timezone string from the manifest.
+  String getCalendarTimezone() {
+    return _db.getManifest()?.timezone ?? 'UTC';
+  }
 }

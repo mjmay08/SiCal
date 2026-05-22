@@ -7,6 +7,9 @@ import 'package:sical/src/services/ics_import_service.dart';
 class FakeCalendarRepository implements CalendarRepository {
   final List<CalendarEvent> savedEvents = <CalendarEvent>[];
   final Map<String, CalendarEvent> masterEvents = <String, CalendarEvent>{};
+  final String calendarTimezone;
+
+  FakeCalendarRepository({this.calendarTimezone = 'UTC'});
 
   @override
   void createEvent(CalendarEvent event) {
@@ -18,6 +21,9 @@ class FakeCalendarRepository implements CalendarRepository {
 
   @override
   CalendarEvent? getMasterEvent(String masterEventId) => masterEvents[masterEventId];
+
+  @override
+  String getCalendarTimezone() => calendarTimezone;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -129,6 +135,161 @@ END:VCALENDAR
       expect(cancelled.isCancelled, isTrue);
       expect(cancelled.masterEventId, master.id);
       expect(cancelled.originalStart, '2026-05-13T09:00:00.000');
+    });
+  });
+
+  group('IcsImportService timezone handling', () {
+    test('DTSTART with TZID stores timezone and wall-clock time', () {
+      final service = IcsImportService(FakeCalendarRepository());
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:tz-1
+SUMMARY:Morning Meeting
+DTSTART;TZID=America/New_York:20260521T100000
+DTEND;TZID=America/New_York:20260521T110000
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.drafts, hasLength(1));
+      final event = result.drafts.single;
+      // Wall-clock time should be stored as-is (10:00 AM Eastern).
+      expect(event.start, DateTime(2026, 5, 21, 10, 0));
+      expect(event.end, DateTime(2026, 5, 21, 11, 0));
+      // Timezone should be set to the TZID from the ICS file.
+      expect(event.timezone, 'America/New_York');
+    });
+
+    test('DTSTART with Z suffix converts to calendar default timezone', () {
+      // Calendar default is America/Los_Angeles (UTC-7 in May = PDT).
+      final service = IcsImportService(
+        FakeCalendarRepository(calendarTimezone: 'America/Los_Angeles'),
+      );
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:utc-1
+SUMMARY:UTC Event
+DTSTART:20260521T150000Z
+DTEND:20260521T160000Z
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.drafts, hasLength(1));
+      final event = result.drafts.single;
+      // 15:00 UTC = 08:00 PDT (America/Los_Angeles, UTC-7 in summer).
+      expect(event.start, DateTime(2026, 5, 21, 8, 0));
+      expect(event.end, DateTime(2026, 5, 21, 9, 0));
+      expect(event.timezone, 'America/Los_Angeles');
+    });
+
+    test('DTSTART without TZID or Z suffix is floating (null timezone)', () {
+      final service = IcsImportService(FakeCalendarRepository());
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:float-1
+SUMMARY:Floating Event
+DTSTART:20260521T090000
+DTEND:20260521T100000
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.drafts, hasLength(1));
+      final event = result.drafts.single;
+      expect(event.start, DateTime(2026, 5, 21, 9, 0));
+      expect(event.timezone, isNull);
+    });
+
+    test('All-day events always have null timezone', () {
+      final service = IcsImportService(FakeCalendarRepository());
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:allday-1
+SUMMARY:All Day
+DTSTART:20260521
+DTEND:20260522
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.drafts, hasLength(1));
+      final event = result.drafts.single;
+      expect(event.allDay, isTrue);
+      expect(event.timezone, isNull);
+    });
+  });
+
+  group('CalendarEvent timezone serialization', () {
+    test('toJson includes timezone field', () {
+      final event = CalendarEvent(
+        title: 'Test',
+        start: DateTime(2026, 5, 21, 10, 0),
+        end: DateTime(2026, 5, 21, 11, 0),
+        timezone: 'Europe/London',
+      );
+      final json = event.toJson();
+      expect(json['timezone'], 'Europe/London');
+    });
+
+    test('fromJson restores timezone field', () {
+      final event = CalendarEvent(
+        title: 'Test',
+        start: DateTime(2026, 5, 21, 10, 0),
+        end: DateTime(2026, 5, 21, 11, 0),
+        timezone: 'Asia/Tokyo',
+      );
+      final restored = CalendarEvent.fromJson(event.toJson());
+      expect(restored.timezone, 'Asia/Tokyo');
+    });
+
+    test('fromJson treats missing timezone key as null (floating)', () {
+      final event = CalendarEvent(
+        title: 'Legacy',
+        start: DateTime(2026, 5, 21, 10, 0),
+        end: DateTime(2026, 5, 21, 11, 0),
+      );
+      final json = event.toJson()..remove('timezone');
+      final restored = CalendarEvent.fromJson(json);
+      expect(restored.timezone, isNull);
+    });
+
+    test('copyWith preserves timezone when not provided', () {
+      final event = CalendarEvent(
+        title: 'Test',
+        start: DateTime(2026, 5, 21, 10, 0),
+        end: DateTime(2026, 5, 21, 11, 0),
+        timezone: 'America/Chicago',
+      );
+      final copy = event.copyWith(title: 'Updated');
+      expect(copy.timezone, 'America/Chicago');
+    });
+
+    test('copyWith can clear timezone to null', () {
+      final event = CalendarEvent(
+        title: 'Test',
+        start: DateTime(2026, 5, 21, 10, 0),
+        end: DateTime(2026, 5, 21, 11, 0),
+        timezone: 'America/Chicago',
+      );
+      final copy = event.copyWith(timezone: null);
+      expect(copy.timezone, isNull);
     });
   });
 }

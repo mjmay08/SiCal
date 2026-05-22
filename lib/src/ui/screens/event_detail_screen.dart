@@ -3,15 +3,61 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/event.dart';
 import '../../models/recurrence.dart';
 import '../../repositories/calendar_repository.dart';
+import '../../services/timezone_service.dart';
 import 'event_form_screen.dart';
 
-class EventDetailScreen extends ConsumerWidget {
+class EventDetailScreen extends ConsumerStatefulWidget {
   final CalendarEvent event;
 
   const EventDetailScreen({super.key, required this.event});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<EventDetailScreen> createState() => _EventDetailScreenState();
+}
+
+class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
+  DateTime? _displayStart;
+  DateTime? _displayEnd;
+  String? _deviceTz;
+
+  CalendarEvent get event => widget.event;
+
+  @override
+  void initState() {
+    super.initState();
+    _initDisplayTimes();
+  }
+
+  Future<void> _initDisplayTimes() async {
+    if (event.timezone == null || event.allDay) return;
+    try {
+      final tz = await TimezoneService.getDeviceTimezone();
+      final start = TimezoneService.convertToTimezone(
+        event.start,
+        event.timezone!,
+        tz,
+      );
+      final end = TimezoneService.convertToTimezone(
+        event.end,
+        event.timezone!,
+        tz,
+      );
+      if (mounted) {
+        setState(() {
+          _displayStart = start;
+          _displayEnd = end;
+          _deviceTz = tz;
+        });
+      }
+    } catch (_) {
+      // Conversion failed — fall back to stored wall-clock time.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final start = _displayStart ?? event.start;
+    final end = _displayEnd ?? event.end;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Event'),
@@ -40,8 +86,14 @@ class EventDetailScreen extends ConsumerWidget {
               icon: Icons.access_time,
               label: event.allDay
                   ? 'All day'
-                  : '${_formatDateTime(event.start)} – ${_formatDateTime(event.end)}',
+                  : '${_formatDateTime(start)} \u2013 ${_formatDateTime(end)}',
             ),
+            if (!event.allDay && event.timezone != null) ...[                
+              _InfoRow(
+                icon: Icons.language,
+                label: _timezoneLabel(start),
+              ),
+            ],
             if (event.location.isNotEmpty)
               _InfoRow(icon: Icons.location_on, label: event.location),
             if (_hasRecurrence)
@@ -276,6 +328,22 @@ class EventDetailScreen extends ConsumerWidget {
     final hour = dt.hour.toString().padLeft(2, '0');
     final min = dt.minute.toString().padLeft(2, '0');
     return '${dt.month}/${dt.day}/${dt.year} $hour:$min';
+  }
+
+  /// Returns a label for the timezone row, e.g. "America/New_York (EDT)"
+  /// or just the timezone name if the abbreviation can't be computed.
+  String _timezoneLabel(DateTime displayTime) {
+    final tz = event.timezone!;
+    final abbr = TimezoneService.getTimezoneAbbreviation(tz, displayTime);
+    // If we converted to device tz, show both home and display tz.
+    if (_deviceTz != null && _deviceTz != tz) {
+      final deviceAbbr = TimezoneService.getTimezoneAbbreviation(
+        _deviceTz!,
+        displayTime,
+      );
+      return '$tz ($abbr) · shown in $_deviceTz ($deviceAbbr)';
+    }
+    return '$tz ($abbr)';
   }
 }
 

@@ -6,6 +6,7 @@ import 'package:icalendar_parser/icalendar_parser.dart';
 import '../models/event.dart';
 import '../models/recurrence.dart';
 import '../repositories/calendar_repository.dart';
+import 'timezone_service.dart';
 
 class IcsImportResult {
   final int importedCount;
@@ -101,6 +102,8 @@ class IcsImportService {
         continue;
       }
 
+      final calendarTimezone = _repository.getCalendarTimezone();
+
       if (override.component['status'] == IcsStatus.cancelled) {
         _repository.createEvent(
           master.copyWith(
@@ -120,6 +123,7 @@ class IcsImportService {
       final imported = _calendarEventFromComponent(
         override.component,
         override.uid,
+        calendarTimezone,
       );
       if (imported == null) {
         continue;
@@ -148,6 +152,7 @@ class IcsImportService {
   _ParsedIcsData _parseCalendarData(String icsString) {
     _registerCustomFields();
     final calendar = ICalendar.fromString(icsString);
+    final calendarTimezone = _repository.getCalendarTimezone();
 
     var skippedCount = 0;
     final masters = <CalendarEvent>[];
@@ -185,7 +190,7 @@ class IcsImportService {
         continue;
       }
 
-      final imported = _calendarEventFromComponent(component, uid);
+      final imported = _calendarEventFromComponent(component, uid, calendarTimezone);
       if (imported == null) {
         skippedCount++;
         continue;
@@ -236,14 +241,40 @@ class IcsImportService {
   CalendarEvent? _calendarEventFromComponent(
     Map<String, dynamic> component,
     String uid,
+    String calendarTimezone,
   ) {
-    final start = _dateTimeFromField(component['dtstart']);
-    if (start == null) return null;
+    final startField = _parseIcsField(component['dtstart']);
+    if (startField == null) return null;
 
     final isAllDay = _isAllDayField(component['dtstart']);
-    final endField = _dateTimeFromField(component['dtend']);
-    final end = _resolveEnd(start: start, end: endField, isAllDay: isAllDay);
-    if (end.isBefore(start)) return null;
+
+    // Determine timezone and adjust start wall-clock time.
+    String? eventTimezone;
+    DateTime startDt = startField.dt;
+    if (!isAllDay) {
+      if (startField.tzid != null && startField.tzid!.isNotEmpty) {
+        // TZID present: wall-clock time in the specified timezone.
+        eventTimezone = startField.tzid;
+      } else if (startField.isUtc) {
+        // Z suffix: UTC time — convert to calendar default timezone wall-clock.
+        eventTimezone = calendarTimezone;
+        startDt = TimezoneService.convertUtcToTimezone(startField.dt, calendarTimezone);
+      }
+      // else: neither TZID nor Z — floating event, null timezone.
+    }
+
+    // Resolve end time.
+    DateTime? endDt;
+    final endField = _parseIcsField(component['dtend']);
+    if (endField != null) {
+      if (!isAllDay && startField.isUtc && eventTimezone != null) {
+        endDt = TimezoneService.convertUtcToTimezone(endField.dt, eventTimezone);
+      } else {
+        endDt = endField.dt;
+      }
+    }
+    final end = _resolveEnd(start: startDt, end: endDt, isAllDay: isAllDay);
+    if (end.isBefore(startDt)) return null;
 
     return CalendarEvent(
       id: _eventIdFromUid(uid),
@@ -251,12 +282,13 @@ class IcsImportService {
           ? (component['summary'] as String).trim()
           : 'Untitled event',
       description: (component['description'] as String?)?.trim() ?? '',
-      start: start,
+      start: startDt,
       end: end,
       allDay: isAllDay,
       recurrenceRule: _parseRRule(component['rrule'] as String?),
       reminderMinutes: const <int>[15],
       location: (component['location'] as String?)?.trim() ?? '',
+      timezone: eventTimezone,
       isDirty: true,
     );
   }
@@ -306,15 +338,42 @@ class IcsImportService {
   }
 
   static DateTime? _dateTimeFromField(Object? field) {
-    if (field is IcsDateTime) return _parseIcsDateTime(field.dt);
+    return _parseIcsField(field)?.dt;
+  }
+
+  /// Parses an ICS datetime field, returning both the wall-clock [DateTime]
+  /// and metadata: the [tzid] string if present and whether the value was UTC
+  /// (Z suffix).
+  static _IcsFieldResult? _parseIcsField(Object? field) {
+    if (field is IcsDateTime) {
+      final result = _parseIcsDateTimeFull(field.dt);
+      if (result == null) return null;
+      return _IcsFieldResult(
+        dt: result.$1,
+        tzid: (field.tzid != null && field.tzid!.isNotEmpty) ? field.tzid : null,
+        isUtc: result.$2,
+      );
+    }
     if (field is Map<String, dynamic>) {
       final dt = field['dt'];
-      if (dt is String) return _parseIcsDateTime(dt);
+      final tzid = field['tzid'] as String?;
+      if (dt is String) {
+        final result = _parseIcsDateTimeFull(dt);
+        if (result == null) return null;
+        return _IcsFieldResult(
+          dt: result.$1,
+          tzid: (tzid != null && tzid.isNotEmpty) ? tzid : null,
+          isUtc: result.$2,
+        );
+      }
     }
     return null;
   }
 
-  static DateTime? _parseIcsDateTime(String raw) {
+  /// Parse an ICS datetime string and return (wallClockDt, isUtc).
+  /// For Z-suffix values, returns the UTC [DateTime] and isUtc=true.
+  /// The caller is responsible for any timezone conversion.
+  static (DateTime, bool)? _parseIcsDateTimeFull(String raw) {
     final value = raw.trim();
     if (value.isEmpty) return null;
 
@@ -327,7 +386,7 @@ class IcsImportService {
       final month = int.tryParse(normalized.substring(4, 6));
       final day = int.tryParse(normalized.substring(6, 8));
       if (year == null || month == null || day == null) return null;
-      return DateTime(year, month, day);
+      return (DateTime(year, month, day), false);
     }
 
     final parts = normalized.split('T');
@@ -354,8 +413,17 @@ class IcsImportService {
     }
 
     return isUtc
-        ? DateTime.utc(year, month, day, hour, minute, second).toLocal()
-        : DateTime(year, month, day, hour, minute, second);
+        ? (DateTime.utc(year, month, day, hour, minute, second), true)
+        : (DateTime(year, month, day, hour, minute, second), false);
+  }
+
+  /// Legacy wrapper used for RRULE UNTIL parsing. Z-suffix values are
+  /// converted to local time (matching prior behavior).
+  static DateTime? _parseIcsDateTime(String raw) {
+    final result = _parseIcsDateTimeFull(raw);
+    if (result == null) return null;
+    final (dt, isUtc) = result;
+    return isUtc ? dt.toLocal() : dt;
   }
 
   static String? _parseRRule(String? rrule) {
@@ -453,5 +521,18 @@ class _ParsedIcsData {
     required this.overrides,
     required this.exdates,
     required this.skippedCount,
+  });
+}
+
+/// Result of parsing a single ICS datetime field, including timezone metadata.
+class _IcsFieldResult {
+  final DateTime dt;
+  final String? tzid;
+  final bool isUtc;
+
+  const _IcsFieldResult({
+    required this.dt,
+    this.tzid,
+    this.isUtc = false,
   });
 }

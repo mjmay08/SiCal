@@ -95,6 +95,9 @@ class AppDatabase {
         'ALTER TABLE events ADD COLUMN is_cancelled INTEGER NOT NULL DEFAULT 0',
       );
     }
+    if (!eventCols.any((r) => r['name'] == 'timezone')) {
+      _db.execute('ALTER TABLE events ADD COLUMN timezone TEXT');
+    }
     _db.execute(
       'CREATE INDEX IF NOT EXISTS idx_events_master ON events(master_event_id)',
     );
@@ -150,8 +153,8 @@ class AppDatabase {
       INSERT OR REPLACE INTO events
         (id, title, description, start, end, all_day, recurrence_rule,
          reminders_json, location, period, created_at, updated_at, is_dirty,
-         master_event_id, original_start, is_cancelled)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         timezone, master_event_id, original_start, is_cancelled)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''',
       [
         event.id,
@@ -167,6 +170,7 @@ class AppDatabase {
         event.createdAt.toIso8601String(),
         event.updatedAt.toIso8601String(),
         event.isDirty ? 1 : 0,
+        event.timezone,
         event.masterEventId,
         event.originalStart,
         event.isCancelled ? 1 : 0,
@@ -372,6 +376,7 @@ class AppDatabase {
     createdAt: DateTime.parse(r['created_at'] as String),
     updatedAt: DateTime.parse(r['updated_at'] as String),
     isDirty: (r['is_dirty'] as int) == 1,
+    timezone: r['timezone'] as String?,
     masterEventId: r['master_event_id'] as String?,
     originalStart: r['original_start'] as String?,
     isCancelled: (r['is_cancelled'] as int?) == 1,

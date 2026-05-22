@@ -20,6 +20,9 @@ class FakeCalendarRepository implements CalendarRepository {
   CalendarEvent? getMasterEvent(String masterEventId) => masterEvents[masterEventId];
 
   @override
+  String getCalendarTimezone() => 'UTC';
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 

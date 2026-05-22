@@ -4,6 +4,7 @@ import 'package:table_calendar/table_calendar.dart';
 import '../../repositories/calendar_repository.dart';
 import '../../services/calendar_file_open_service.dart';
 import '../../services/incoming_calendar_intent_handler.dart';
+import '../../services/timezone_service.dart';
 import '../../models/event.dart';
 import '../widgets/sync_status_banner.dart';
 import 'event_detail_screen.dart';
@@ -220,35 +221,61 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
   void _importIncomingCalendarText(String text) {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
-    ref.read(calendarRepositoryProvider.future).then((repository) {
-      return handleIncomingCalendarText(
-        navigator: navigator,
-        messenger: messenger,
-        repository: repository,
-        text: text,
-        onImported: () {
-          ref.invalidate(eventsForDayProvider);
-          _loadVisibleEvents();
-        },
-      );
-    }).catchError((e) {
-      if (!messenger.mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Could not import calendar file: $e')),
-      );
-    });
+    ref
+        .read(calendarRepositoryProvider.future)
+        .then((repository) {
+          return handleIncomingCalendarText(
+            navigator: navigator,
+            messenger: messenger,
+            repository: repository,
+            text: text,
+            onImported: () {
+              ref.invalidate(eventsForDayProvider);
+              _loadVisibleEvents();
+            },
+          );
+        })
+        .catchError((e) {
+          if (!messenger.mounted) return;
+          messenger.showSnackBar(
+            SnackBar(content: Text('Could not import calendar file: $e')),
+          );
+        });
   }
 }
 
-class _EventListTile extends StatelessWidget {
+class _EventListTile extends ConsumerWidget {
   final CalendarEvent event;
   final VoidCallback onTap;
 
   const _EventListTile({required this.event, required this.onTap});
 
   @override
-  Widget build(BuildContext context) {
-    final timeFormat = TimeOfDay.fromDateTime(event.start);
+  Widget build(BuildContext context, WidgetRef ref) {
+    DateTime displayStart = event.start;
+    DateTime displayEnd = event.end;
+
+    if (!event.allDay && event.timezone != null) {
+      final deviceTz = ref.watch(deviceTimezoneProvider).asData?.value;
+      if (deviceTz != null && deviceTz != event.timezone) {
+        try {
+          displayStart = TimezoneService.convertToTimezone(
+            event.start,
+            event.timezone!,
+            deviceTz,
+          );
+          displayEnd = TimezoneService.convertToTimezone(
+            event.end,
+            event.timezone!,
+            deviceTz,
+          );
+        } catch (_) {
+          // Unknown timezone — fall back to stored wall-clock time.
+        }
+      }
+    }
+
+    final timeFormat = TimeOfDay.fromDateTime(displayStart);
     return ListTile(
       leading: event.allDay
           ? const Icon(Icons.calendar_today)
@@ -257,7 +284,7 @@ class _EventListTile extends StatelessWidget {
       subtitle: Text(
         event.allDay
             ? 'All day'
-            : '${timeFormat.format(context)} – ${TimeOfDay.fromDateTime(event.end).format(context)}',
+            : '${timeFormat.format(context)} – ${TimeOfDay.fromDateTime(displayEnd).format(context)}',
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
