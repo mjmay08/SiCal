@@ -5,6 +5,7 @@ import '../../database/database.dart';
 import '../../repositories/calendar_repository.dart';
 import '../../services/auth_service.dart';
 import '../../services/ics_import_service.dart';
+import '../../services/timezone_service.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -33,6 +34,7 @@ class SettingsScreen extends ConsumerWidget {
           const Divider(),
           _SectionHeader('Calendar'),
           _CalendarNameTile(),
+          _CalendarTimezoneTile(),
           ListTile(
             leading: const Icon(Icons.upload_file),
             title: const Text('Import Calendar File'),
@@ -329,5 +331,110 @@ class _CalendarNameTile extends ConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+class _CalendarTimezoneTile extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dbAsync = ref.watch(appDatabaseProvider);
+    return dbAsync.when(
+      data: (db) {
+        final manifest = db.getManifest();
+        final current = manifest?.timezone ?? 'UTC';
+        return ListTile(
+          leading: const Icon(Icons.language),
+          title: const Text('Calendar Timezone'),
+          subtitle: Text(current),
+          onTap: () => _pickTimezone(context, db, current),
+        );
+      },
+      loading: () => const ListTile(title: Text('Calendar Timezone')),
+      error: (_, __) => const ListTile(title: Text('Calendar Timezone')),
+    );
+  }
+
+  Future<void> _pickTimezone(
+    BuildContext context,
+    AppDatabase db,
+    String current,
+  ) async {
+    final allTimezones = TimezoneService.getAllTimezones();
+    String filter = '';
+    List<String> filtered = allTimezones;
+
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          return DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.75,
+            minChildSize: 0.4,
+            maxChildSize: 0.95,
+            builder: (ctx, scrollController) => SafeArea(
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Calendar Timezone',
+                          style: Theme.of(ctx).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          decoration: const InputDecoration(
+                            hintText: 'Search timezones…',
+                            prefixIcon: Icon(Icons.search),
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          onChanged: (q) {
+                            final lower = q.toLowerCase();
+                            setModalState(() {
+                              filter = lower;
+                              filtered = lower.isEmpty
+                                  ? allTimezones
+                                  : allTimezones
+                                      .where(
+                                        (tz) => tz.toLowerCase().contains(lower),
+                                      )
+                                      .toList();
+                            });
+                          },
+                          autofocus: true,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView.builder(
+                      controller: scrollController,
+                      itemCount: filtered.length,
+                      itemBuilder: (ctx, i) {
+                        final tz = filtered[i];
+                        return ListTile(
+                          title: Text(tz),
+                          selected: tz == current,
+                          onTap: () => Navigator.pop(ctx, tz),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    if (selected != null && selected != current) {
+      db.upsertManifest(timezone: selected);
+    }
   }
 }

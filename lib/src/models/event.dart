@@ -15,6 +15,10 @@ class CalendarEvent {
   final DateTime updatedAt;
   final bool isDirty;
 
+  /// IANA timezone string for this event's home timezone, e.g. "America/New_York".
+  /// null = floating event (all-day or no conversion). Stored as wall-clock time.
+  final String? timezone;
+
   // Recurrence exception fields — set when this event overrides a single
   // instance of a recurring master event.
   final String? masterEventId;
@@ -39,6 +43,7 @@ class CalendarEvent {
     DateTime? createdAt,
     DateTime? updatedAt,
     this.isDirty = true,
+    this.timezone,
     this.masterEventId,
     this.originalStart,
     this.isCancelled = false,
@@ -73,6 +78,7 @@ class CalendarEvent {
     String? location,
     bool? isDirty,
     DateTime? updatedAt,
+    Object? timezone = _sentinel,
     Object? masterEventId = _sentinel,
     Object? originalStart = _sentinel,
     bool? isCancelled,
@@ -95,6 +101,7 @@ class CalendarEvent {
       createdAt: createdAt,
       updatedAt: updatedAt ?? DateTime.now().toUtc(),
       isDirty: isDirty ?? this.isDirty,
+      timezone: timezone == _sentinel ? this.timezone : timezone as String?,
       masterEventId: masterEventId == _sentinel
           ? this.masterEventId
           : masterEventId as String?,
@@ -123,6 +130,7 @@ class CalendarEvent {
     'master_event_id': masterEventId,
     'original_start': originalStart,
     'is_cancelled': isCancelled,
+    'timezone': timezone,
   };
 
   factory CalendarEvent.fromJson(Map<String, dynamic> json) => CalendarEvent(
@@ -142,6 +150,7 @@ class CalendarEvent {
     createdAt: DateTime.parse(json['created_at'] as String),
     updatedAt: DateTime.parse(json['updated_at'] as String),
     isDirty: false,
+    timezone: json['timezone'] as String?,
     masterEventId: json['master_event_id'] as String?,
     originalStart: json['original_start'] as String?,
     isCancelled: json['is_cancelled'] as bool? ?? false,
