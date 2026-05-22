@@ -26,7 +26,7 @@ const APP_META: AppMetadata = AppMetadata {
     name: "SiCal",
     description: "Decentralized calendar powered by the Sia network",
     service_url: "https://github.com/mjmay08/SiCal",
-    logo_url: "https://raw.githubusercontent.com/mjmay08/SiCal/refs/heads/main/assets/icon.png",
+    logo_url: Some("https://raw.githubusercontent.com/mjmay08/SiCal/refs/heads/main/assets/icon.png"),
     callback_url: None,
 };
 
