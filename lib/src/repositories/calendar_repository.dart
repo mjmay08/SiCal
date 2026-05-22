@@ -5,6 +5,7 @@ import '../models/event.dart';
 import '../models/recurrence.dart';
 import '../services/sia_storage_service.dart';
 import '../services/sync_engine.dart';
+import '../services/timezone_service.dart';
 
 const _uuid = Uuid();
 
@@ -29,10 +30,60 @@ final calendarRepositoryProvider = FutureProvider<CalendarRepository>((
   return CalendarRepository(db);
 });
 
+/// Returns the effective display start for [event] in [deviceTz].
+/// For all-day events and floating events (no stored timezone), the stored
+/// wall-clock time is returned as-is. Otherwise the time is converted from
+/// the event's home timezone to the device timezone so that day-boundaries
+/// are evaluated from the user's perspective.
+DateTime effectiveDisplayStart(CalendarEvent event, String? deviceTz) {
+  if (event.allDay || event.timezone == null || deviceTz == null) {
+    return event.start;
+  }
+  if (deviceTz == event.timezone) return event.start;
+  try {
+    return TimezoneService.convertToTimezone(
+      event.start,
+      event.timezone!,
+      deviceTz,
+    );
+  } catch (_) {
+    return event.start;
+  }
+}
+
 final eventsForDayProvider =
     FutureProvider.family<List<CalendarEvent>, DateTime>((ref, day) async {
       final repo = await ref.watch(calendarRepositoryProvider.future);
-      return repo.getEventsForDay(day);
+      final deviceTz = ref.watch(deviceTimezoneProvider).asData?.value;
+
+      // Query ±1 day wider than needed so that events whose stored wall-clock
+      // time is near midnight (before timezone conversion) are not missed.
+      final from = DateTime(
+        day.year,
+        day.month,
+        day.day,
+      ).subtract(const Duration(days: 1));
+      final to = DateTime(
+        day.year,
+        day.month,
+        day.day,
+      ).add(const Duration(days: 2));
+      final candidates = repo.getEventsInRange(from, to);
+
+      final dayStart = DateTime(day.year, day.month, day.day);
+      final dayEnd = dayStart.add(const Duration(days: 1));
+
+      final results =
+          candidates.where((e) {
+            final start = effectiveDisplayStart(e, deviceTz);
+            return !start.isBefore(dayStart) && start.isBefore(dayEnd);
+          }).toList()..sort(
+            (a, b) => effectiveDisplayStart(
+              a,
+              deviceTz,
+            ).compareTo(effectiveDisplayStart(b, deviceTz)),
+          );
+      return results;
     });
 
 final selectedDayProvider = NotifierProvider<SelectedDayNotifier, DateTime>(
