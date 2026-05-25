@@ -98,6 +98,11 @@ class AppDatabase {
     if (!eventCols.any((r) => r['name'] == 'timezone')) {
       _db.execute('ALTER TABLE events ADD COLUMN timezone TEXT');
     }
+    if (!eventCols.any((r) => r['name'] == 'is_deleted')) {
+      _db.execute(
+        'ALTER TABLE events ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
+      );
+    }
     _db.execute(
       'CREATE INDEX IF NOT EXISTS idx_events_master ON events(master_event_id)',
     );
@@ -116,9 +121,10 @@ class AppDatabase {
   // -----------------------------------------------------------------------
 
   List<CalendarEvent> getEventsForPeriod(String period) {
-    final result = _db.select('SELECT * FROM events WHERE period = ?', [
-      period,
-    ]);
+    final result = _db.select(
+      'SELECT * FROM events WHERE period = ? AND is_deleted = 0',
+      [period],
+    );
     return result.map(_rowToEvent).toList();
   }
 
@@ -129,7 +135,7 @@ class AppDatabase {
 
   List<CalendarEvent> getEventsInRange(DateTime from, DateTime to) {
     final result = _db.select(
-      'SELECT * FROM events WHERE start >= ? AND start < ? ORDER BY start',
+      'SELECT * FROM events WHERE start >= ? AND start < ? AND is_deleted = 0 ORDER BY start',
       [from.toIso8601String(), to.toIso8601String()],
     );
     return result.map(_rowToEvent).toList();
@@ -178,14 +184,35 @@ class AppDatabase {
     );
   }
 
+  /// Upsert an event received from the network.
+  /// Skips the update if a local row already exists with uncommitted changes
+  /// (is_dirty = 1), so local edits and soft-deletes are never clobbered
+  /// by a pull.
+  void upsertRemoteEvent(CalendarEvent event) {
+    final existing = getEventById(event.id);
+    if (existing != null && existing.isDirty) return;
+    upsertEvent(event);
+  }
+
   void markEventsClean(String period) {
+    // Remove soft-deleted rows now that their period has been synced.
+    _db.execute('DELETE FROM events WHERE period = ? AND is_deleted = 1', [
+      period,
+    ]);
     _db.execute('UPDATE events SET is_dirty = 0 WHERE period = ?', [period]);
   }
 
   void deleteEvent(String id) {
-    // Also delete any exceptions that reference this master.
-    _db.execute('DELETE FROM events WHERE master_event_id = ?', [id]);
-    _db.execute('DELETE FROM events WHERE id = ?', [id]);
+    // Soft-delete so the sync engine sees the period as dirty and re-uploads
+    // the chunk (or removes it if this was the last event in the period).
+    // Rows are physically removed by markEventsClean() after a successful sync.
+    _db.execute(
+      'UPDATE events SET is_deleted = 1, is_dirty = 1 WHERE master_event_id = ?',
+      [id],
+    );
+    _db.execute('UPDATE events SET is_deleted = 1, is_dirty = 1 WHERE id = ?', [
+      id,
+    ]);
   }
 
   /// Get all recurring master events whose series could produce instances
@@ -196,6 +223,7 @@ class AppDatabase {
       '''SELECT * FROM events
          WHERE recurrence_rule IS NOT NULL
            AND master_event_id IS NULL
+           AND is_deleted = 0
            AND start <= ?
          ORDER BY start''',
       [to.toIso8601String()],
@@ -206,7 +234,7 @@ class AppDatabase {
   /// Get all exception events for a given master event.
   List<CalendarEvent> getExceptionsForMaster(String masterEventId) {
     final result = _db.select(
-      'SELECT * FROM events WHERE master_event_id = ?',
+      'SELECT * FROM events WHERE master_event_id = ? AND is_deleted = 0',
       [masterEventId],
     );
     return result.map(_rowToEvent).toList();
@@ -219,6 +247,7 @@ class AppDatabase {
          WHERE start >= ? AND start < ?
            AND (recurrence_rule IS NULL OR recurrence_rule = '')
            AND master_event_id IS NULL
+           AND is_deleted = 0
          ORDER BY start''',
       [from.toIso8601String(), to.toIso8601String()],
     );

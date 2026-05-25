@@ -33,6 +33,11 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       CalendarFileOpenService.instance.setListener(_importIncomingCalendarText);
     });
+    // On a fresh install or after restoring from a recovery phrase the local
+    // database has no sync cursor, meaning we have never pulled from the
+    // network.  Kick off an automatic sync so remote events appear without the
+    // user having to tap the sync button.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoSync());
   }
 
   @override
@@ -88,6 +93,9 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
     final eventsAsync = ref.watch(
       eventsForDayProvider(_selectedDay ?? _focusedDay),
     );
+    final dirtyCount = ref
+        .watch(appDatabaseProvider)
+        .maybeWhen(data: (db) => db.getDirtyEvents().length, orElse: () => 0);
 
     return Scaffold(
       appBar: AppBar(
@@ -101,8 +109,15 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
             }),
           ),
           IconButton(
-            icon: const Icon(Icons.sync),
-            tooltip: 'Sync',
+            icon: Badge(
+              isLabelVisible: dirtyCount > 0,
+              backgroundColor: Colors.amber,
+              smallSize: 8,
+              child: const Icon(Icons.sync),
+            ),
+            tooltip: dirtyCount > 0
+                ? '$dirtyCount event(s) pending upload — tap to sync'
+                : 'Sync',
             onPressed: _sync,
           ),
           IconButton(
@@ -207,6 +222,16 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
     // Refresh after returning — event may have been edited or deleted.
     ref.invalidate(eventsForDayProvider);
     _loadVisibleEvents();
+  }
+
+  /// Auto-sync on first launch (no saved cursor means we have never pulled
+  /// from the network — covers both fresh installs and phrase restores).
+  Future<void> _maybeAutoSync() async {
+    final db = await ref.read(appDatabaseProvider.future);
+    final syncState = db.getSyncState();
+    if (syncState == null || syncState.cursor.isEmpty) {
+      await _sync();
+    }
   }
 
   Future<void> _sync() async {
