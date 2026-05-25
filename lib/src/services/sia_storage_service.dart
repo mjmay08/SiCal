@@ -60,9 +60,9 @@ class SiaStorageService {
     await SiaBridge.deleteObject(objectId);
   }
 
-  /// Fetch object events since cursor for incremental sync.
-  /// Returns (events, lastEventUpdatedAt, lastEventId).
-  Future<(List<SiaObjectEvent>, String, String)> listObjects(
+  /// Fetch one page of object events since cursor for incremental sync.
+  /// Returns (events, lastEventUpdatedAt, lastEventId, hasMore).
+  Future<(List<SiaObjectEvent>, String, String, bool)> listObjects(
     String cursorAfter,
     String cursorId,
   ) async {
@@ -84,7 +84,7 @@ class SiaStorageService {
         ? result.events.last.objectId
         : cursorId;
 
-    return (events, lastUpdatedAt, lastId);
+    return (events, lastUpdatedAt, lastId, result.hasMore);
   }
 
   /// Update metadata on a pinned object without re-uploading data.

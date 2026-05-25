@@ -47,32 +47,41 @@ class SyncEngine {
     var cursorAfter = syncState?.cursor ?? '';
     var cursorId = syncState?.cursorId ?? '';
 
-    _log(
-      'pullChanges listObjects(cursor=${cursorAfter.isEmpty ? "<empty>" : cursorAfter})',
-    );
-    final (events, newCursorAfter, newCursorId) = await _sia.listObjects(
-      cursorAfter,
-      cursorId,
-    );
-    _log('pullChanges got ${events.length} event(s)');
-
-    for (var i = 0; i < events.length; i++) {
-      final event = events[i];
-      onProgress?.call(
-        phase: SyncPhase.pulling,
-        message: 'Downloading remote changes...',
-        current: i + 1,
-        total: events.length,
+    var hasMore = true;
+    var totalProcessed = 0;
+    while (hasMore) {
+      _log(
+        'pullChanges listObjects(cursor=${cursorAfter.isEmpty ? "<empty>" : cursorAfter})',
       );
-      if (event.deleted) {
-        _handleDeletedEvent(event);
-      } else {
-        await _handlePinnedEvent(event);
-      }
-    }
+      final (events, newCursorAfter, newCursorId, more) = await _sia
+          .listObjects(cursorAfter, cursorId);
+      _log('pullChanges got ${events.length} event(s), hasMore=$more');
 
-    _db.updateSyncCursor(newCursorAfter, newCursorId);
-    _log('pullChanges DONE');
+      for (var i = 0; i < events.length; i++) {
+        final event = events[i];
+        totalProcessed++;
+        onProgress?.call(
+          phase: SyncPhase.pulling,
+          message: 'Downloading remote changes...',
+          current: totalProcessed,
+          total: 0,
+        );
+        if (event.deleted) {
+          _handleDeletedEvent(event);
+        } else {
+          await _handlePinnedEvent(event);
+        }
+      }
+
+      cursorAfter = newCursorAfter;
+      cursorId = newCursorId;
+      _db.updateSyncCursor(cursorAfter, cursorId);
+
+      // Stop if there are no more pages, or if an empty page was returned
+      // (guard against an infinite loop on a misbehaving server).
+      hasMore = more && events.isNotEmpty;
+    }
+    _log('pullChanges DONE — $totalProcessed event(s) total');
   }
 
   /// Push local dirty changes to Sia.
@@ -106,7 +115,9 @@ class SyncEngine {
     // Also include dirty periods that may not have a chunk row yet.
     allPeriods.addAll(dirtyPeriods);
 
-    // Mark dirty events clean & handle deleted periods.
+    // Identify deleted periods (all live events have been soft-deleted).
+    // Do NOT mark events clean yet — that only happens after the upload
+    // succeeds, so an interrupted sync can be retried on next launch.
     final deletedPeriods = <String>[];
     for (final period in dirtyPeriods) {
       final events = _db.getAllEventsForPeriod(period);
@@ -114,7 +125,6 @@ class SyncEngine {
         deletedPeriods.add(period);
         _db.deleteChunk(period);
       }
-      _db.markEventsClean(period);
     }
 
     // Remove deleted periods from the set of periods to upload.
@@ -143,22 +153,11 @@ class SyncEngine {
       }
     }
 
-    // Add manifest as the last upload item (calendar settings only).
-    final manifestData = jsonEncode({
-      'calendar_name': manifest?.calendarName ?? 'My Calendar',
-      'timezone': manifest?.timezone ?? 'UTC',
-      'color': manifest?.color ?? '#1ED660',
-      'updated_at': DateTime.now().toUtc().toIso8601String(),
-    });
-    uploads.add(
-      PackedUpload(dataJson: manifestData, metadataJson: '{"type":"manifest"}'),
-    );
-    final manifestIndex = uploads.length - 1;
     _log(
-      'pushChanges uploading ${uploads.length} item(s) packed (${uploadPeriods.length} chunk(s) + 1 manifest)',
+      'pushChanges uploading ${uploads.length} item(s) packed (${uploadPeriods.length} chunk(s))',
     );
 
-    // Single packed upload — all chunks + manifest share one slab.
+    // Pass 1: Upload all chunks in a single packed slab.
     // Poll shard-level progress from Rust every 200ms for granular UI updates.
     onProgress?.call(
       phase: SyncPhase.uploading,
@@ -182,7 +181,9 @@ class SyncEngine {
       });
     }
 
-    final ids = await _sia.uploadPacked(uploads);
+    final ids = uploads.isNotEmpty
+        ? await _sia.uploadPacked(uploads)
+        : <String>[];
     shardTimer?.cancel();
 
     // Send final shard progress.
@@ -204,20 +205,36 @@ class SyncEngine {
       _db.upsertChunk(period, newObjectId, 0);
     }
 
-    // Update manifest metadata with the real chunk map.
-    final manifestObjectId = ids[manifestIndex];
-    final chunkMapMeta = jsonEncode({'type': 'manifest', 'chunks': chunks});
-    _log(
-      'pushChanges updating manifest metadata (${chunkMapMeta.length} bytes)',
-    );
+    // Pass 2: Upload manifest with the chunk map embedded in its data.
+    // This avoids storing the chunk map in Sia object metadata, which has a
+    // 1024-byte limit that is easily exceeded with many months of events.
     onProgress?.call(
       phase: SyncPhase.updatingMetadata,
-      message: 'Updating metadata...',
+      message: 'Uploading manifest...',
     );
-    await _sia.updateMetadata(manifestObjectId, chunkMapMeta);
-    _log('pushChanges metadata updated');
+    final manifestData = jsonEncode({
+      'calendar_name': manifest?.calendarName ?? 'My Calendar',
+      'timezone': manifest?.timezone ?? 'UTC',
+      'color': manifest?.color ?? '#1ED660',
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+      'chunks': chunks,
+    });
+    _log(
+      'pushChanges uploading manifest (data=${manifestData.length} bytes, ${chunks.length} chunk(s))',
+    );
+    final manifestObjectId = await _sia.uploadManifest(manifestData);
+    _log(
+      'pushChanges manifest uploaded → ${manifestObjectId.substring(0, 12)}…',
+    );
 
     _db.upsertManifest(objectId: manifestObjectId);
+
+    // Upload succeeded — now safe to mark dirty periods as clean.
+    // This physically removes soft-deleted rows and clears the is_dirty flag.
+    // Doing this after the upload means an interrupted sync is retried cleanly.
+    for (final period in dirtyPeriods) {
+      _db.markEventsClean(period);
+    }
 
     // Delete ALL old objects so the previous slab(s) can be fully pruned.
     if (oldIdsToDelete.isNotEmpty) {
@@ -257,15 +274,17 @@ class SyncEngine {
       final chunk = Chunk.decode(dataJson);
 
       for (final calEvent in chunk.events) {
-        _db.upsertEvent(calEvent.copyWith(isDirty: false));
+        _db.upsertRemoteEvent(calEvent.copyWith(isDirty: false));
       }
       _db.upsertChunk(period, event.objectId, 0);
     } else if (type == 'manifest') {
       final (dataJson, _) = await _sia.downloadObject(event.objectId);
       // Calendar settings are in the object data.
       final settings = jsonDecode(dataJson) as Map<String, dynamic>;
-      // Chunk map is in the Sia metadata.
-      final chunkMap = meta['chunks'] as Map<String, dynamic>?;
+      // Chunk map is stored in the manifest data (new format) or Sia metadata
+      // (old format, kept for backward compatibility).
+      final chunkMap =
+          (settings['chunks'] ?? meta['chunks']) as Map<String, dynamic>?;
 
       _db.upsertManifest(
         objectId: event.objectId,
@@ -291,7 +310,7 @@ class SyncEngine {
               );
               final chunk = Chunk.decode(chunkDataJson);
               for (final calEvent in chunk.events) {
-                _db.upsertEvent(calEvent.copyWith(isDirty: false));
+                _db.upsertRemoteEvent(calEvent.copyWith(isDirty: false));
               }
               _db.upsertChunk(period, chunkObjectId, 0);
             } catch (_) {
