@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:table_calendar/table_calendar.dart';
+import 'dart:async' show unawaited;
 import '../../repositories/calendar_repository.dart';
 import '../../services/calendar_file_open_service.dart';
 import '../../services/incoming_calendar_intent_handler.dart';
+import '../../services/sync_foreground_service.dart';
 import '../../services/timezone_service.dart';
 import '../../models/event.dart';
 import '../widgets/sync_status_banner.dart';
@@ -18,15 +20,18 @@ class CalendarScreen extends ConsumerStatefulWidget {
   ConsumerState<CalendarScreen> createState() => _CalendarScreenState();
 }
 
-class _CalendarScreenState extends ConsumerState<CalendarScreen> {
+class _CalendarScreenState extends ConsumerState<CalendarScreen>
+    with WidgetsBindingObserver {
   CalendarFormat _calendarFormat = CalendarFormat.month;
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
   Map<DateTime, List<CalendarEvent>> _eventsByDay = {};
+  bool _isSyncing = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _selectedDay = _focusedDay;
     // Load events for the initial month so markers appear immediately.
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadVisibleEvents());
@@ -42,8 +47,18 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     CalendarFileOpenService.instance.clearListener();
     super.dispose();
+  }
+
+  /// Trigger a silent sync when the user backgrounds the app so that any
+  /// pending dirty events are uploaded even if they forgot to tap Sync.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _sync(silent: true);
+    }
   }
 
   /// Normalise to midnight for event-day lookup.
@@ -234,9 +249,18 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
     }
   }
 
-  Future<void> _sync() async {
+  Future<void> _sync({bool silent = false}) async {
+    if (_isSyncing) return;
+    _isSyncing = true;
+    var syncError = false;
+
     final progress = ref.read(syncProgressProvider.notifier);
     progress.update(phase: SyncPhase.pulling, message: 'Starting sync...');
+
+    // Start a foreground service on Android so the OS doesn't kill the process
+    // while the (potentially long) Sia sync is running in the background.
+    await SyncForegroundService.start();
+
     try {
       final engine = await ref.read(syncEngineProvider.future);
       await engine.fullSync(
@@ -247,21 +271,34 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
             current: current,
             total: total,
           );
+          if (message != null) {
+            final hasCount = (current ?? 0) > 0 && (total ?? 0) > 0;
+            final notificationText = hasCount
+                ? '$message (${current}/${total})'
+                : message;
+            unawaited(SyncForegroundService.updateProgress(notificationText));
+          }
         },
       );
     } catch (e) {
+      syncError = true;
       progress.reset();
-      if (mounted) {
+      if (!silent && mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
-        return;
       }
+    } finally {
+      await SyncForegroundService.stop();
+      _isSyncing = false;
     }
+
+    if (syncError) return;
+
     progress.reset();
     ref.invalidate(eventsForDayProvider);
     _loadVisibleEvents();
-    if (mounted) {
+    if (!silent && mounted) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Sync complete')));
