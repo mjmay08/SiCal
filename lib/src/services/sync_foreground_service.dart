@@ -1,5 +1,10 @@
 import 'dart:io';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../bridge/sia_bridge.dart';
+import '../database/database.dart';
+import 'sia_storage_service.dart';
+import 'sync_engine.dart';
 
 /// Top-level entry point for the background isolate spawned by the foreground
 /// service. Annotated with @pragma so the Dart VM keeps it alive in release
@@ -11,11 +16,37 @@ void startSyncForegroundTaskCallback() {
 }
 
 class _SyncTaskHandler extends TaskHandler {
-  @override
-  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {}
+  static bool _isSyncRunning = false;
+
+  Future<void> _runBackgroundSyncIfPossible() async {
+    if (!Platform.isIOS || _isSyncRunning) return;
+    _isSyncRunning = true;
+    try {
+      await SiaBridge.init();
+      const storage = FlutterSecureStorage();
+      final appKey = await storage.read(key: 'sia_app_key_hex');
+      if (appKey == null || appKey.isEmpty) return;
+      await SiaBridge.connect(appKey);
+
+      final db = await AppDatabase.getInstance();
+      final engine = SyncEngine(db, SiaStorageService());
+      await engine.fullSync();
+    } catch (_) {
+      // Ignore background sync failures; next iOS background wake will retry.
+    } finally {
+      _isSyncRunning = false;
+    }
+  }
 
   @override
-  void onRepeatEvent(DateTime timestamp) {}
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    await _runBackgroundSyncIfPossible();
+  }
+
+  @override
+  void onRepeatEvent(DateTime timestamp) {
+    _runBackgroundSyncIfPossible();
+  }
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {}
@@ -80,6 +111,21 @@ class SyncForegroundService {
       callback: startSyncForegroundTaskCallback,
     );
     _lastText = 'Starting…';
+  }
+
+  /// Start iOS background sync scheduling.
+  ///
+  /// iOS controls execution cadence (roughly ~30s windows every ~15 minutes)
+  /// and may defer execution based on system policy.
+  static Future<void> startIosBackgroundSyncScheduler() async {
+    if (!Platform.isIOS) return;
+    if (await FlutterForegroundTask.isRunningService) return;
+
+    await FlutterForegroundTask.startService(
+      notificationTitle: 'SiCal Background Sync',
+      notificationText: 'Background sync enabled',
+      callback: startSyncForegroundTaskCallback,
+    );
   }
 
   /// Update the notification text with the latest progress message.
