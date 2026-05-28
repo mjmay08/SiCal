@@ -17,5 +17,6 @@ Future<void> main() async {
   TimezoneService.initialize();
   await SiaBridge.init();
   await CalendarFileOpenService.instance.initialize();
+  await SyncForegroundService.startIosBackgroundSyncScheduler();
   runApp(const ProviderScope(child: SiCalApp()));
 }
