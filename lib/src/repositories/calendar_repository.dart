@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
+
 import '../database/database.dart';
+import '../models/calendar.dart';
 import '../models/event.dart';
 import '../models/recurrence.dart';
 import '../services/sia_storage_service.dart';
@@ -30,11 +32,38 @@ final calendarRepositoryProvider = FutureProvider<CalendarRepository>((
   return CalendarRepository(db);
 });
 
-/// Returns the effective display start for [event] in [deviceTz].
-/// For all-day events and floating events (no stored timezone), the stored
-/// wall-clock time is returned as-is. Otherwise the time is converted from
-/// the event's home timezone to the device timezone so that day-boundaries
-/// are evaluated from the user's perspective.
+final selectedCalendarIdProvider =
+    NotifierProvider<SelectedCalendarIdNotifier, String?>(
+      SelectedCalendarIdNotifier.new,
+    );
+
+class SelectedCalendarIdNotifier extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? calendarId) {
+    state = calendarId;
+  }
+}
+
+final calendarsProvider = FutureProvider<List<CalendarInfo>>((ref) async {
+  final repo = await ref.watch(calendarRepositoryProvider.future);
+  return repo.getCalendars();
+});
+
+final visibleCalendarIdsProvider = FutureProvider<List<String>>((ref) async {
+  final calendars = await ref.watch(calendarsProvider.future);
+  final visible = calendars.where((c) => c.isVisible).map((c) => c.id).toList();
+  return visible.isEmpty ? [kDefaultCalendarId] : visible;
+});
+
+final calendarLookupProvider = FutureProvider<Map<String, CalendarInfo>>((
+  ref,
+) async {
+  final calendars = await ref.watch(calendarsProvider.future);
+  return {for (final calendar in calendars) calendar.id: calendar};
+});
+
 DateTime effectiveDisplayStart(CalendarEvent event, String? deviceTz) {
   if (event.allDay || event.timezone == null || deviceTz == null) {
     return event.start;
@@ -54,10 +83,11 @@ DateTime effectiveDisplayStart(CalendarEvent event, String? deviceTz) {
 final eventsForDayProvider =
     FutureProvider.family<List<CalendarEvent>, DateTime>((ref, day) async {
       final repo = await ref.watch(calendarRepositoryProvider.future);
+      final visibleCalendarIds = await ref.watch(
+        visibleCalendarIdsProvider.future,
+      );
       final deviceTz = ref.watch(deviceTimezoneProvider).asData?.value;
 
-      // Query ±1 day wider than needed so that events whose stored wall-clock
-      // time is near midnight (before timezone conversion) are not missed.
       final from = DateTime(
         day.year,
         day.month,
@@ -68,7 +98,11 @@ final eventsForDayProvider =
         day.month,
         day.day,
       ).add(const Duration(days: 2));
-      final candidates = repo.getEventsInRange(from, to);
+      final candidates = repo.getEventsInRange(
+        from,
+        to,
+        calendarIds: visibleCalendarIds,
+      );
 
       final dayStart = DateTime(day.year, day.month, day.day);
       final dayEnd = dayStart.add(const Duration(days: 1));
@@ -100,23 +134,37 @@ class CalendarRepository {
 
   CalendarRepository(this._db);
 
-  /// Get all events (including expanded recurring instances) for [day].
-  List<CalendarEvent> getEventsForDay(DateTime day) {
+  List<CalendarEvent> getEventsForDay(
+    DateTime day, {
+    Iterable<String>? calendarIds,
+  }) {
     final start = DateTime(day.year, day.month, day.day);
     final end = start.add(const Duration(days: 1));
-    return getEventsInRange(start, end);
+    return getEventsInRange(start, end, calendarIds: calendarIds);
   }
 
-  /// Get all events (including expanded recurring instances) in [from]..[to].
-  List<CalendarEvent> getEventsInRange(DateTime from, DateTime to) {
-    // 1. Non-recurring, non-exception events in range.
-    final regular = _db.getNonRecurringEventsInRange(from, to);
+  List<CalendarEvent> getEventsInRange(
+    DateTime from,
+    DateTime to, {
+    Iterable<String>? calendarIds,
+  }) {
+    final regular = _db.getNonRecurringEventsInRange(
+      from,
+      to,
+      calendarIds: calendarIds,
+    );
 
-    // 2. Expand recurring masters.
-    final masters = _db.getRecurringMastersInRange(from, to);
+    final masters = _db.getRecurringMastersInRange(
+      from,
+      to,
+      calendarIds: calendarIds,
+    );
     final expanded = <CalendarEvent>[];
     for (final master in masters) {
-      final exceptions = _db.getExceptionsForMaster(master.id);
+      final exceptions = _db.getExceptionsForMaster(
+        master.id,
+        calendarId: master.calendarId,
+      );
       final exMap = <String, CalendarEvent>{};
       for (final ex in exceptions) {
         if (ex.originalStart != null) exMap[ex.originalStart!] = ex;
@@ -126,7 +174,6 @@ class CalendarRepository {
       );
     }
 
-    // 3. Merge and sort by start time.
     final all = [...regular, ...expanded];
     all.sort((a, b) => a.start.compareTo(b.start));
     return all;
@@ -135,6 +182,17 @@ class CalendarRepository {
   List<CalendarEvent> getEventsForPeriod(String period) {
     return _db.getEventsForPeriod(period);
   }
+
+  List<CalendarInfo> getCalendars() => _db.getCalendars();
+
+  List<CalendarInfo> getVisibleCalendars() => _db.getVisibleCalendars();
+
+  CalendarInfo? getCalendarById(String calendarId) =>
+      _db.getCalendarById(calendarId);
+
+  void upsertCalendar(CalendarInfo calendar) => _db.upsertCalendar(calendar);
+
+  void deleteCalendar(String calendarId) => _db.deleteCalendar(calendarId);
 
   void createEvent(CalendarEvent event) {
     _db.upsertEvent(event);
@@ -152,12 +210,6 @@ class CalendarRepository {
     _db.deleteEvent(id);
   }
 
-  // -----------------------------------------------------------------------
-  // Recurring event operations
-  // -----------------------------------------------------------------------
-
-  /// Edit a single occurrence of a recurring series.
-  /// Creates an exception event that overrides the virtual instance.
   void editSingleOccurrence(
     CalendarEvent master,
     DateTime originalInstanceStart,
@@ -174,7 +226,6 @@ class CalendarRepository {
     _db.upsertEvent(exception);
   }
 
-  /// Delete a single occurrence by creating a cancelled exception.
   void deleteSingleOccurrence(
     CalendarEvent master,
     DateTime originalInstanceStart,
@@ -191,16 +242,11 @@ class CalendarRepository {
     _db.upsertEvent(exception);
   }
 
-  /// Edit this and all following occurrences.
-  /// Splits the series: truncates the old master at [splitDate], creates a
-  /// new master for the rest.
   void editThisAndFollowing(
     CalendarEvent master,
     DateTime splitDate,
     CalendarEvent edited,
   ) {
-    // Truncate original master — set UNTIL to the day before the split so the
-    // old series does not generate an instance on the split date.
     final rule = RecurrenceRule.decode(master.recurrenceRule!);
     final dayBeforeSplit = DateTime(
       splitDate.year,
@@ -215,10 +261,7 @@ class CalendarRepository {
     );
     _db.upsertEvent(updatedMaster);
 
-    // Create new master starting from the edited occurrence.
-    final newRule = rule.copyWith(
-      until: rule.until, // preserve original end
-    );
+    final newRule = rule.copyWith(until: rule.until);
     final newMaster = edited.copyWith(
       id: _uuid.v4(),
       recurrenceRule: newRule.encode(),
@@ -230,8 +273,6 @@ class CalendarRepository {
     _db.upsertEvent(newMaster);
   }
 
-  /// Delete this and all following occurrences.
-  /// Truncates the series at [splitDate].
   void deleteThisAndFollowing(CalendarEvent master, DateTime splitDate) {
     final rule = RecurrenceRule.decode(master.recurrenceRule!);
     final dayBeforeSplit = DateTime(
@@ -248,9 +289,7 @@ class CalendarRepository {
     _db.upsertEvent(updatedMaster);
   }
 
-  /// Edit all occurrences — updates the master event directly.
   void editAllOccurrences(CalendarEvent master, CalendarEvent edited) {
-    // Preserve the master's recurrenceRule and id.
     final updated = edited.copyWith(
       id: master.id,
       recurrenceRule: master.recurrenceRule,
@@ -262,18 +301,19 @@ class CalendarRepository {
     _db.upsertEvent(updated);
   }
 
-  /// Delete all occurrences — removes master and all exceptions.
   void deleteAllOccurrences(String masterId) {
-    _db.deleteEvent(masterId); // cascades to exceptions
+    _db.deleteEvent(masterId);
   }
 
-  /// Look up the persisted master event for a virtual instance.
   CalendarEvent? getMasterEvent(String masterEventId) {
     return _db.getEventById(masterEventId);
   }
 
-  /// Returns the calendar's default IANA timezone string from the manifest.
-  String getCalendarTimezone() {
+  String getCalendarTimezone({String? calendarId}) {
+    if (calendarId != null) {
+      final calendar = _db.getCalendarById(calendarId);
+      if (calendar != null) return calendar.timezone;
+    }
     return _db.getManifest()?.timezone ?? 'UTC';
   }
 }

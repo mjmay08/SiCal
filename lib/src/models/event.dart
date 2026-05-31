@@ -1,7 +1,10 @@
 import 'package:uuid/uuid.dart';
 
+const kDefaultCalendarId = 'default';
+
 class CalendarEvent {
   final String id;
+  final String calendarId;
   final String title;
   final String description;
   final DateTime start;
@@ -31,6 +34,7 @@ class CalendarEvent {
 
   CalendarEvent({
     String? id,
+    this.calendarId = kDefaultCalendarId,
     required this.title,
     this.description = '',
     required this.start,
@@ -68,6 +72,7 @@ class CalendarEvent {
 
   CalendarEvent copyWith({
     String? id,
+    String? calendarId,
     String? title,
     String? description,
     DateTime? start,
@@ -87,6 +92,7 @@ class CalendarEvent {
     final newStart = start ?? this.start;
     return CalendarEvent(
       id: id ?? this.id,
+      calendarId: calendarId ?? this.calendarId,
       title: title ?? this.title,
       description: description ?? this.description,
       start: newStart,
@@ -117,6 +123,7 @@ class CalendarEvent {
 
   Map<String, dynamic> toJson() => {
     'id': id,
+    'calendar_id': calendarId,
     'title': title,
     'description': description,
     'start': start.toIso8601String(),
@@ -135,6 +142,7 @@ class CalendarEvent {
 
   factory CalendarEvent.fromJson(Map<String, dynamic> json) => CalendarEvent(
     id: json['id'] as String,
+    calendarId: json['calendar_id'] as String? ?? kDefaultCalendarId,
     title: json['title'] as String,
     description: json['description'] as String? ?? '',
     start: DateTime.parse(json['start'] as String),

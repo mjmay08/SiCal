@@ -108,6 +108,7 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
     final eventsAsync = ref.watch(
       eventsForDayProvider(_selectedDay ?? _focusedDay),
     );
+    final calendarLookup = ref.watch(calendarLookupProvider).value ?? const {};
     final dirtyCount = ref
         .watch(appDatabaseProvider)
         .maybeWhen(data: (db) => db.getDirtyEvents().length, orElse: () => 0);
@@ -176,6 +177,38 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
               _focusedDay = focusedDay;
               _loadVisibleEvents();
             },
+            calendarBuilders: CalendarBuilders(
+              markerBuilder: (context, day, events) {
+                if (events.isEmpty) return const SizedBox.shrink();
+                final colors = <Color>[];
+                for (final item in events.cast<CalendarEvent>()) {
+                  final color = _calendarColor(
+                    calendarLookup[item.calendarId]?.color,
+                    fallback: Theme.of(context).colorScheme.primary,
+                  );
+                  if (!colors.contains(color)) colors.add(color);
+                }
+                final preview = colors.take(3).toList();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 30),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      for (final color in preview)
+                        Container(
+                          width: 6,
+                          height: 6,
+                          margin: const EdgeInsets.symmetric(horizontal: 1),
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
             calendarStyle: CalendarStyle(
               todayDecoration: BoxDecoration(
                 color: Theme.of(context).colorScheme.primary.withAlpha(100),
@@ -216,6 +249,8 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
   }
 
   void _createEvent() async {
+    final selectedCalendarId =
+        ref.read(selectedCalendarIdProvider) ?? kDefaultCalendarId;
     final result = await Navigator.of(context).push<CalendarEvent>(
       MaterialPageRoute(
         builder: (_) =>
@@ -224,7 +259,7 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
     );
     if (result != null) {
       final repo = await ref.read(calendarRepositoryProvider.future);
-      repo.createEvent(result);
+      repo.createEvent(result.copyWith(calendarId: selectedCalendarId));
       ref.invalidate(eventsForDayProvider);
       _loadVisibleEvents();
     }
@@ -339,6 +374,7 @@ class _EventListTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final calendarLookup = ref.watch(calendarLookupProvider).value ?? const {};
     DateTime displayStart = event.start;
     DateTime displayEnd = event.end;
 
@@ -365,8 +401,20 @@ class _EventListTile extends ConsumerWidget {
     final timeFormat = TimeOfDay.fromDateTime(displayStart);
     return ListTile(
       leading: event.allDay
-          ? const Icon(Icons.calendar_today)
-          : const Icon(Icons.access_time),
+          ? Icon(
+              Icons.calendar_today,
+              color: _calendarColor(
+                calendarLookup[event.calendarId]?.color,
+                fallback: Theme.of(context).colorScheme.primary,
+              ),
+            )
+          : Icon(
+              Icons.access_time,
+              color: _calendarColor(
+                calendarLookup[event.calendarId]?.color,
+                fallback: Theme.of(context).colorScheme.primary,
+              ),
+            ),
       title: Text(event.title),
       subtitle: Text(
         event.allDay
@@ -396,4 +444,13 @@ class _EventListTile extends ConsumerWidget {
       onTap: onTap,
     );
   }
+}
+
+Color _calendarColor(String? hex, {required Color fallback}) {
+  if (hex == null || hex.isEmpty) return fallback;
+  final cleaned = hex.replaceAll('#', '').trim();
+  final normalized = cleaned.length == 6 ? 'FF$cleaned' : cleaned;
+  final parsed = int.tryParse(normalized, radix: 16);
+  if (parsed == null) return fallback;
+  return Color(parsed);
 }

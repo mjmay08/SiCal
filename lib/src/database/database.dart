@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
+import '../models/calendar.dart';
 import '../models/event.dart';
 
 class AppDatabase {
@@ -28,8 +29,22 @@ class AppDatabase {
 
   void _createTables() {
     _db.execute('''
+      CREATE TABLE IF NOT EXISTS calendars (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        timezone TEXT NOT NULL DEFAULT 'UTC',
+        color TEXT NOT NULL DEFAULT '#1ED660',
+        is_visible INTEGER NOT NULL DEFAULT 1,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        app_key_hex TEXT
+      )
+    ''');
+    _db.execute('''
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY,
+        calendar_id TEXT NOT NULL DEFAULT 'default',
         title TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
         start TEXT NOT NULL,
@@ -47,6 +62,7 @@ class AppDatabase {
     _db.execute('''
       CREATE TABLE IF NOT EXISTS chunks (
         period TEXT PRIMARY KEY,
+        calendar_id TEXT NOT NULL DEFAULT 'default',
         object_id TEXT NOT NULL,
         version INTEGER NOT NULL DEFAULT 0,
         last_synced_at TEXT NOT NULL
@@ -54,7 +70,7 @@ class AppDatabase {
     ''');
     _db.execute('''
       CREATE TABLE IF NOT EXISTS manifest (
-        id INTEGER PRIMARY KEY DEFAULT 1,
+        calendar_id TEXT PRIMARY KEY,
         object_id TEXT,
         version INTEGER NOT NULL DEFAULT 0,
         calendar_name TEXT NOT NULL DEFAULT 'My Calendar',
@@ -65,6 +81,7 @@ class AppDatabase {
     _db.execute('''
       CREATE TABLE IF NOT EXISTS sync_state (
         id INTEGER PRIMARY KEY DEFAULT 1,
+        calendar_id TEXT NOT NULL DEFAULT 'default',
         cursor TEXT NOT NULL DEFAULT '',
         cursor_id TEXT NOT NULL DEFAULT '',
         last_sync_at TEXT
@@ -75,6 +92,11 @@ class AppDatabase {
     if (!cols.any((r) => r['name'] == 'cursor_id')) {
       _db.execute(
         "ALTER TABLE sync_state ADD COLUMN cursor_id TEXT NOT NULL DEFAULT ''",
+      );
+    }
+    if (!cols.any((r) => r['name'] == 'calendar_id')) {
+      _db.execute(
+        "ALTER TABLE sync_state ADD COLUMN calendar_id TEXT NOT NULL DEFAULT 'default'",
       );
     }
     _db.execute(
@@ -103,27 +125,161 @@ class AppDatabase {
         'ALTER TABLE events ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0',
       );
     }
+    if (!eventCols.any((r) => r['name'] == 'calendar_id')) {
+      _db.execute(
+        "ALTER TABLE events ADD COLUMN calendar_id TEXT NOT NULL DEFAULT 'default'",
+      );
+    }
+
+    final chunkCols = _db.select("PRAGMA table_info('chunks')");
+    if (!chunkCols.any((r) => r['name'] == 'calendar_id')) {
+      _db.execute(
+        "ALTER TABLE chunks ADD COLUMN calendar_id TEXT NOT NULL DEFAULT 'default'",
+      );
+    }
+
+    final manifestCols = _db.select("PRAGMA table_info('manifest')");
+    if (!manifestCols.any((r) => r['name'] == 'calendar_id')) {
+      _db.execute(
+        "ALTER TABLE manifest ADD COLUMN calendar_id TEXT NOT NULL DEFAULT 'default'",
+      );
+    }
+    _migrateManifestToCalendarPrimaryKey();
+
     _db.execute(
       'CREATE INDEX IF NOT EXISTS idx_events_master ON events(master_event_id)',
     );
+    _db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_events_calendar_id ON events(calendar_id)',
+    );
+    _db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_events_calendar_period ON events(calendar_id, period)',
+    );
+    _db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_calendars_visible ON calendars(is_visible, sort_order)',
+    );
+
+    _seedDefaultCalendarFromManifest();
+    _backfillLegacyRowsToDefaultCalendar();
+  }
+
+  void _seedDefaultCalendarFromManifest() {
+    final existing = _db.select('SELECT id FROM calendars LIMIT 1');
+    if (existing.isNotEmpty) return;
+
+    var legacyManifest = _db.select(
+      'SELECT * FROM manifest WHERE calendar_id = ?',
+      [kDefaultCalendarId],
+    );
+    if (legacyManifest.isEmpty) {
+      legacyManifest = _db.select('SELECT * FROM manifest LIMIT 1');
+    }
+    final now = DateTime.now().toUtc().toIso8601String();
+    final name = legacyManifest.isNotEmpty
+        ? (legacyManifest.first['calendar_name'] as String? ?? 'My Calendar')
+        : 'My Calendar';
+    final timezone = legacyManifest.isNotEmpty
+        ? (legacyManifest.first['timezone'] as String? ?? 'UTC')
+        : 'UTC';
+    final color = legacyManifest.isNotEmpty
+        ? (legacyManifest.first['color'] as String? ?? '#1ED660')
+        : '#1ED660';
+
+    _db.execute(
+      '''
+      INSERT OR REPLACE INTO calendars
+      (id, name, timezone, color, is_visible, sort_order, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, 0, ?, ?)
+      ''',
+      [kDefaultCalendarId, name, timezone, color, now, now],
+    );
+  }
+
+  void _backfillLegacyRowsToDefaultCalendar() {
+    _db.execute(
+      "UPDATE events SET calendar_id = ? WHERE calendar_id IS NULL OR calendar_id = ''",
+      [kDefaultCalendarId],
+    );
+    _db.execute(
+      "UPDATE chunks SET calendar_id = ? WHERE calendar_id IS NULL OR calendar_id = ''",
+      [kDefaultCalendarId],
+    );
+    _db.execute(
+      "UPDATE sync_state SET calendar_id = ? WHERE calendar_id IS NULL OR calendar_id = ''",
+      [kDefaultCalendarId],
+    );
+    _db.execute(
+      "UPDATE manifest SET calendar_id = ? WHERE calendar_id IS NULL OR calendar_id = ''",
+      [kDefaultCalendarId],
+    );
+  }
+
+  void _migrateManifestToCalendarPrimaryKey() {
+    final manifestCols = _db.select("PRAGMA table_info('manifest')");
+    final calendarPk = manifestCols
+        .where((r) => r['name'] == 'calendar_id')
+        .map((r) => (r['pk'] as int?) ?? 0)
+        .fold<int>(0, (a, b) => a + b);
+    if (calendarPk > 0) return;
+
+    _db.execute('BEGIN');
+    try {
+      _db.execute('''
+        CREATE TABLE manifest_new (
+          calendar_id TEXT PRIMARY KEY,
+          object_id TEXT,
+          version INTEGER NOT NULL DEFAULT 0,
+          calendar_name TEXT NOT NULL DEFAULT 'My Calendar',
+          timezone TEXT NOT NULL DEFAULT 'UTC',
+          color TEXT NOT NULL DEFAULT '#1ED660'
+        )
+      ''');
+      _db.execute('''
+        INSERT OR REPLACE INTO manifest_new
+        (calendar_id, object_id, version, calendar_name, timezone, color)
+        SELECT
+          CASE
+            WHEN calendar_id IS NULL OR calendar_id = '' THEN 'default'
+            ELSE calendar_id
+          END,
+          object_id,
+          version,
+          calendar_name,
+          timezone,
+          color
+        FROM manifest
+      ''');
+      _db.execute('DROP TABLE manifest');
+      _db.execute('ALTER TABLE manifest_new RENAME TO manifest');
+      _db.execute('COMMIT');
+    } catch (_) {
+      _db.execute('ROLLBACK');
+      rethrow;
+    }
   }
 
   /// Delete all local data — events, chunks, manifest, and sync state.
   void clearAllTables() {
+    _db.execute('DELETE FROM calendars');
     _db.execute('DELETE FROM events');
     _db.execute('DELETE FROM chunks');
     _db.execute('DELETE FROM manifest');
     _db.execute('DELETE FROM sync_state');
+    _seedDefaultCalendarFromManifest();
   }
 
   // -----------------------------------------------------------------------
   // Events
   // -----------------------------------------------------------------------
 
-  List<CalendarEvent> getEventsForPeriod(String period) {
-    final result = _db.select(
-      'SELECT * FROM events WHERE period = ? AND is_deleted = 0',
-      [period],
+  List<CalendarEvent> getEventsForPeriod(
+    String period, {
+    Iterable<String>? calendarIds,
+  }) {
+    final result = _selectEventsWithCalendarFilter(
+      where: 'period = ? AND is_deleted = 0',
+      params: [period],
+      calendarIds: calendarIds,
     );
     return result.map(_rowToEvent).toList();
   }
@@ -133,23 +289,32 @@ class AppDatabase {
     return result.isEmpty ? null : _rowToEvent(result.first);
   }
 
-  List<CalendarEvent> getEventsInRange(DateTime from, DateTime to) {
-    final result = _db.select(
-      'SELECT * FROM events WHERE start >= ? AND start < ? AND is_deleted = 0 ORDER BY start',
-      [from.toIso8601String(), to.toIso8601String()],
+  List<CalendarEvent> getEventsInRange(
+    DateTime from,
+    DateTime to, {
+    Iterable<String>? calendarIds,
+  }) {
+    final result = _selectEventsWithCalendarFilter(
+      where: 'start >= ? AND start < ? AND is_deleted = 0',
+      params: [from.toIso8601String(), to.toIso8601String()],
+      calendarIds: calendarIds,
+      orderBy: 'start',
     );
     return result.map(_rowToEvent).toList();
   }
 
-  List<CalendarEvent> getDirtyEvents() {
-    final result = _db.select('SELECT * FROM events WHERE is_dirty = 1');
+  List<CalendarEvent> getDirtyEvents({Iterable<String>? calendarIds}) {
+    final result = _selectEventsWithCalendarFilter(
+      where: 'is_dirty = 1',
+      calendarIds: calendarIds,
+    );
     return result.map(_rowToEvent).toList();
   }
 
-  List<String> getDirtyPeriods() {
-    final result = _db.select(
-      'SELECT DISTINCT period FROM events WHERE is_dirty = 1',
-    );
+  List<String> getDirtyPeriods({Iterable<String>? calendarIds}) {
+    final (clause, args) = _calendarFilterClause(calendarIds);
+    final sql = 'SELECT DISTINCT period FROM events WHERE is_dirty = 1$clause';
+    final result = _db.select(sql, args);
     return result.map((r) => r['period'] as String).toList();
   }
 
@@ -159,8 +324,8 @@ class AppDatabase {
       INSERT OR REPLACE INTO events
         (id, title, description, start, end, all_day, recurrence_rule,
          reminders_json, location, period, created_at, updated_at, is_dirty,
-         timezone, master_event_id, original_start, is_cancelled)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         timezone, master_event_id, original_start, is_cancelled, calendar_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''',
       [
         event.id,
@@ -180,6 +345,7 @@ class AppDatabase {
         event.masterEventId,
         event.originalStart,
         event.isCancelled ? 1 : 0,
+        event.calendarId,
       ],
     );
   }
@@ -194,96 +360,141 @@ class AppDatabase {
     upsertEvent(event);
   }
 
-  void markEventsClean(String period) {
+  void markEventsClean(String period, {String? calendarId}) {
+    final targetCalendarId = calendarId ?? kDefaultCalendarId;
     // Remove soft-deleted rows now that their period has been synced.
-    _db.execute('DELETE FROM events WHERE period = ? AND is_deleted = 1', [
-      period,
-    ]);
-    _db.execute('UPDATE events SET is_dirty = 0 WHERE period = ?', [period]);
+    _db.execute(
+      'DELETE FROM events WHERE period = ? AND calendar_id = ? AND is_deleted = 1',
+      [period, targetCalendarId],
+    );
+    _db.execute(
+      'UPDATE events SET is_dirty = 0 WHERE period = ? AND calendar_id = ?',
+      [period, targetCalendarId],
+    );
   }
 
   void deleteEvent(String id) {
+    final existing = getEventById(id);
+    final calendarId = existing?.calendarId ?? kDefaultCalendarId;
     // Soft-delete so the sync engine sees the period as dirty and re-uploads
     // the chunk (or removes it if this was the last event in the period).
     // Rows are physically removed by markEventsClean() after a successful sync.
     _db.execute(
-      'UPDATE events SET is_deleted = 1, is_dirty = 1 WHERE master_event_id = ?',
-      [id],
+      '''
+      UPDATE events
+      SET is_deleted = 1, is_dirty = 1
+      WHERE master_event_id = ? AND calendar_id = ?
+      ''',
+      [id, calendarId],
     );
-    _db.execute('UPDATE events SET is_deleted = 1, is_dirty = 1 WHERE id = ?', [
-      id,
-    ]);
+    _db.execute(
+      'UPDATE events SET is_deleted = 1, is_dirty = 1 WHERE id = ? AND calendar_id = ?',
+      [id, calendarId],
+    );
   }
 
   /// Get all recurring master events whose series could produce instances
   /// within [from]..[to]. A master qualifies if its start <= [to] (the series
   /// may extend forward) and it has a recurrence rule.
-  List<CalendarEvent> getRecurringMastersInRange(DateTime from, DateTime to) {
-    final result = _db.select(
-      '''SELECT * FROM events
-         WHERE recurrence_rule IS NOT NULL
+  List<CalendarEvent> getRecurringMastersInRange(
+    DateTime from,
+    DateTime to, {
+    Iterable<String>? calendarIds,
+  }) {
+    final result = _selectEventsWithCalendarFilter(
+      where: '''recurrence_rule IS NOT NULL
            AND master_event_id IS NULL
            AND is_deleted = 0
-           AND start <= ?
-         ORDER BY start''',
-      [to.toIso8601String()],
+           AND start <= ?''',
+      params: [to.toIso8601String()],
+      calendarIds: calendarIds,
+      orderBy: 'start',
     );
     return result.map(_rowToEvent).toList();
   }
 
   /// Get all exception events for a given master event.
-  List<CalendarEvent> getExceptionsForMaster(String masterEventId) {
-    final result = _db.select(
-      'SELECT * FROM events WHERE master_event_id = ? AND is_deleted = 0',
-      [masterEventId],
+  List<CalendarEvent> getExceptionsForMaster(
+    String masterEventId, {
+    String? calendarId,
+  }) {
+    final result = _selectEventsWithCalendarFilter(
+      where: 'master_event_id = ? AND is_deleted = 0',
+      params: [masterEventId],
+      calendarIds: calendarId == null ? null : [calendarId],
     );
     return result.map(_rowToEvent).toList();
   }
 
   /// Get non-recurring, non-exception events in a date range.
-  List<CalendarEvent> getNonRecurringEventsInRange(DateTime from, DateTime to) {
-    final result = _db.select(
-      '''SELECT * FROM events
-         WHERE start >= ? AND start < ?
+  List<CalendarEvent> getNonRecurringEventsInRange(
+    DateTime from,
+    DateTime to, {
+    Iterable<String>? calendarIds,
+  }) {
+    final result = _selectEventsWithCalendarFilter(
+      where: '''start >= ? AND start < ?
            AND (recurrence_rule IS NULL OR recurrence_rule = '')
            AND master_event_id IS NULL
-           AND is_deleted = 0
-         ORDER BY start''',
-      [from.toIso8601String(), to.toIso8601String()],
+           AND is_deleted = 0''',
+      params: [from.toIso8601String(), to.toIso8601String()],
+      calendarIds: calendarIds,
+      orderBy: 'start',
     );
     return result.map(_rowToEvent).toList();
   }
 
-  List<CalendarEvent> getAllEventsForPeriod(String period) =>
-      getEventsForPeriod(period);
+  List<CalendarEvent> getAllEventsForPeriod(
+    String period, {
+    Iterable<String>? calendarIds,
+  }) => getEventsForPeriod(period, calendarIds: calendarIds);
 
   // -----------------------------------------------------------------------
   // Chunks
   // -----------------------------------------------------------------------
 
-  Map<String, dynamic>? getChunk(String period) {
-    final result = _db.select('SELECT * FROM chunks WHERE period = ?', [
-      period,
-    ]);
+  Map<String, dynamic>? getChunk(String period, {String? calendarId}) {
+    final result = _db.select(
+      'SELECT * FROM chunks WHERE period = ? AND calendar_id = ?',
+      [period, calendarId ?? kDefaultCalendarId],
+    );
     return result.isEmpty ? null : result.first;
   }
 
-  void upsertChunk(String period, String objectId, int version) {
+  void upsertChunk(
+    String period,
+    String objectId,
+    int version, {
+    String? calendarId,
+  }) {
     _db.execute(
       '''
-      INSERT OR REPLACE INTO chunks (period, object_id, version, last_synced_at)
-      VALUES (?, ?, ?, ?)
+      INSERT OR REPLACE INTO chunks
+      (period, calendar_id, object_id, version, last_synced_at)
+      VALUES (?, ?, ?, ?, ?)
     ''',
-      [period, objectId, version, DateTime.now().toUtc().toIso8601String()],
+      [
+        period,
+        calendarId ?? kDefaultCalendarId,
+        objectId,
+        version,
+        DateTime.now().toUtc().toIso8601String(),
+      ],
     );
   }
 
-  void deleteChunk(String period) {
-    _db.execute('DELETE FROM chunks WHERE period = ?', [period]);
+  void deleteChunk(String period, {String? calendarId}) {
+    _db.execute('DELETE FROM chunks WHERE period = ? AND calendar_id = ?', [
+      period,
+      calendarId ?? kDefaultCalendarId,
+    ]);
   }
 
-  List<String> getAllChunkPeriods() {
-    final result = _db.select('SELECT period FROM chunks');
+  List<String> getAllChunkPeriods({String? calendarId}) {
+    final result = _db.select(
+      'SELECT period FROM chunks WHERE calendar_id = ?',
+      [calendarId ?? kDefaultCalendarId],
+    );
     return result.map((r) => r['period'] as String).toList();
   }
 
@@ -291,8 +502,11 @@ class AppDatabase {
   // Manifest
   // -----------------------------------------------------------------------
 
-  ManifestRow? getManifest() {
-    final result = _db.select('SELECT * FROM manifest WHERE id = 1');
+  ManifestRow? getManifest({String? calendarId}) {
+    final targetCalendarId = calendarId ?? kDefaultCalendarId;
+    final result = _db.select('SELECT * FROM manifest WHERE calendar_id = ?', [
+      targetCalendarId,
+    ]);
     if (result.isEmpty) return null;
     final r = result.first;
     final oid = r['object_id'] as String?;
@@ -302,24 +516,29 @@ class AppDatabase {
       calendarName: r['calendar_name'] as String,
       timezone: r['timezone'] as String,
       color: r['color'] as String,
+      calendarId: r['calendar_id'] as String? ?? kDefaultCalendarId,
     );
   }
 
   void upsertManifest({
+    String? calendarId,
     String? objectId,
     int? version,
     String? calendarName,
     String? timezone,
     String? color,
   }) {
-    final existing = getManifest();
+    final targetCalendarId = calendarId ?? kDefaultCalendarId;
+    final existing = getManifest(calendarId: targetCalendarId);
     if (existing == null) {
       _db.execute(
         '''
-        INSERT INTO manifest (id, object_id, version, calendar_name, timezone, color)
-        VALUES (1, ?, ?, ?, ?, ?)
+        INSERT INTO manifest
+        (calendar_id, object_id, version, calendar_name, timezone, color)
+        VALUES (?, ?, ?, ?, ?, ?)
       ''',
         [
+          targetCalendarId,
           objectId,
           version ?? 0,
           calendarName ?? 'My Calendar',
@@ -352,8 +571,21 @@ class AppDatabase {
       }
       if (sets.isNotEmpty) {
         _db.execute(
-          'UPDATE manifest SET ${sets.join(', ')} WHERE id = 1',
-          params,
+          'UPDATE manifest SET ${sets.join(', ')} WHERE calendar_id = ?',
+          [...params, targetCalendarId],
+        );
+      }
+    }
+
+    if (targetCalendarId == kDefaultCalendarId) {
+      final existingCalendar = getCalendarById(kDefaultCalendarId);
+      if (existingCalendar != null) {
+        upsertCalendar(
+          existingCalendar.copyWith(
+            name: calendarName ?? existingCalendar.name,
+            timezone: timezone ?? existingCalendar.timezone,
+            color: color ?? existingCalendar.color,
+          ),
         );
       }
     }
@@ -363,28 +595,86 @@ class AppDatabase {
   // Sync State
   // -----------------------------------------------------------------------
 
-  SyncStateRow? getSyncState() {
-    final result = _db.select('SELECT * FROM sync_state WHERE id = 1');
+  SyncStateRow? getSyncState({String? calendarId}) {
+    final result = _db.select(
+      'SELECT * FROM sync_state WHERE id = 1 AND calendar_id = ?',
+      [calendarId ?? kDefaultCalendarId],
+    );
     if (result.isEmpty) return null;
     final r = result.first;
     return SyncStateRow(
       cursor: r['cursor'] as String,
       cursorId: r['cursor_id'] as String? ?? '',
+      calendarId: r['calendar_id'] as String? ?? kDefaultCalendarId,
       lastSyncAt: r['last_sync_at'] != null
           ? DateTime.parse(r['last_sync_at'] as String)
           : null,
     );
   }
 
-  void updateSyncCursor(String cursor, String cursorId) {
+  void updateSyncCursor(String cursor, String cursorId, {String? calendarId}) {
     final now = DateTime.now().toUtc().toIso8601String();
+    final targetCalendarId = calendarId ?? kDefaultCalendarId;
     _db.execute(
       '''
-      INSERT OR REPLACE INTO sync_state (id, cursor, cursor_id, last_sync_at)
-      VALUES (1, ?, ?, ?)
+      INSERT OR REPLACE INTO sync_state
+      (id, calendar_id, cursor, cursor_id, last_sync_at)
+      VALUES (1, ?, ?, ?, ?)
     ''',
-      [cursor, cursorId, now],
+      [targetCalendarId, cursor, cursorId, now],
     );
+  }
+
+  // -----------------------------------------------------------------------
+  // Calendars
+  // -----------------------------------------------------------------------
+
+  List<CalendarInfo> getCalendars() {
+    final rows = _db.select(
+      'SELECT * FROM calendars ORDER BY sort_order, name',
+    );
+    return rows.map(_rowToCalendar).toList();
+  }
+
+  List<CalendarInfo> getVisibleCalendars() {
+    final rows = _db.select(
+      'SELECT * FROM calendars WHERE is_visible = 1 ORDER BY sort_order, name',
+    );
+    return rows.map(_rowToCalendar).toList();
+  }
+
+  CalendarInfo? getCalendarById(String calendarId) {
+    final rows = _db.select('SELECT * FROM calendars WHERE id = ?', [
+      calendarId,
+    ]);
+    return rows.isEmpty ? null : _rowToCalendar(rows.first);
+  }
+
+  void upsertCalendar(CalendarInfo calendar) {
+    _db.execute(
+      '''
+      INSERT OR REPLACE INTO calendars
+      (id, name, timezone, color, is_visible, sort_order, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ''',
+      [
+        calendar.id,
+        calendar.name,
+        calendar.timezone,
+        calendar.color,
+        calendar.isVisible ? 1 : 0,
+        calendar.sortOrder,
+        calendar.createdAt.toIso8601String(),
+        calendar.updatedAt.toIso8601String(),
+      ],
+    );
+  }
+
+  void deleteCalendar(String calendarId) {
+    if (calendarId == kDefaultCalendarId) return;
+    _db.execute('DELETE FROM calendars WHERE id = ?', [calendarId]);
+    _db.execute('DELETE FROM events WHERE calendar_id = ?', [calendarId]);
+    _db.execute('DELETE FROM chunks WHERE calendar_id = ?', [calendarId]);
   }
 
   // -----------------------------------------------------------------------
@@ -393,6 +683,7 @@ class AppDatabase {
 
   CalendarEvent _rowToEvent(Row r) => CalendarEvent(
     id: r['id'] as String,
+    calendarId: r['calendar_id'] as String? ?? kDefaultCalendarId,
     title: r['title'] as String,
     description: r['description'] as String? ?? '',
     start: DateTime.parse(r['start'] as String),
@@ -411,6 +702,37 @@ class AppDatabase {
     isCancelled: (r['is_cancelled'] as int?) == 1,
   );
 
+  CalendarInfo _rowToCalendar(Row r) => CalendarInfo(
+    id: r['id'] as String,
+    name: r['name'] as String,
+    timezone: r['timezone'] as String,
+    color: r['color'] as String,
+    isVisible: (r['is_visible'] as int?) != 0,
+    sortOrder: r['sort_order'] as int? ?? 0,
+    createdAt: DateTime.parse(r['created_at'] as String),
+    updatedAt: DateTime.parse(r['updated_at'] as String),
+  );
+
+  ResultSet _selectEventsWithCalendarFilter({
+    required String where,
+    List<Object?> params = const [],
+    Iterable<String>? calendarIds,
+    String? orderBy,
+  }) {
+    final (calendarClause, calendarParams) = _calendarFilterClause(calendarIds);
+    final order = orderBy == null ? '' : ' ORDER BY $orderBy';
+    final sql = 'SELECT * FROM events WHERE $where$calendarClause$order';
+    return _db.select(sql, [...params, ...calendarParams]);
+  }
+
+  (String, List<Object?>) _calendarFilterClause(Iterable<String>? calendarIds) {
+    if (calendarIds == null) return ('', const []);
+    final ids = calendarIds.where((id) => id.isNotEmpty).toList();
+    if (ids.isEmpty) return (' AND 1 = 0', const []);
+    final placeholders = List.filled(ids.length, '?').join(', ');
+    return (' AND calendar_id IN ($placeholders)', ids);
+  }
+
   List<int> _parseReminders(String json) {
     final list = jsonDecode(json) as List<dynamic>;
     return list.map((e) => e as int).toList();
@@ -420,12 +742,14 @@ class AppDatabase {
 }
 
 class ManifestRow {
+  final String calendarId;
   final String? objectId;
   final int version;
   final String calendarName;
   final String timezone;
   final String color;
   const ManifestRow({
+    required this.calendarId,
     this.objectId,
     required this.version,
     required this.calendarName,
@@ -435,10 +759,12 @@ class ManifestRow {
 }
 
 class SyncStateRow {
+  final String calendarId;
   final String cursor;
   final String cursorId;
   final DateTime? lastSyncAt;
   const SyncStateRow({
+    required this.calendarId,
     required this.cursor,
     required this.cursorId,
     this.lastSyncAt,

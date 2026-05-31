@@ -14,8 +14,15 @@ class SiaStorageService {
   }
 
   /// Upload the manifest packed into shared slabs. Returns the new object ID.
-  Future<String> uploadManifest(String manifestJson) async {
-    final metadataJson = jsonEncode({'type': 'manifest'});
+  Future<String> uploadManifest(
+    String manifestJson, {
+    String? calendarId,
+  }) async {
+    final metadataJson = jsonEncode({
+      'type': 'manifest',
+      if (calendarId != null && calendarId.isNotEmpty)
+        'calendar_id': calendarId,
+    });
     return _uploadPackedSingle(manifestJson, metadataJson);
   }
 
