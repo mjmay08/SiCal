@@ -1,19 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../models/calendar.dart';
 import '../../models/event.dart';
 import '../../models/recurrence.dart';
+import '../../repositories/calendar_repository.dart';
 import '../../services/timezone_service.dart';
 
-class EventFormScreen extends StatefulWidget {
+class EventFormScreen extends ConsumerStatefulWidget {
   final CalendarEvent? existingEvent;
   final DateTime? initialDate;
 
   const EventFormScreen({super.key, this.existingEvent, this.initialDate});
 
   @override
-  State<EventFormScreen> createState() => _EventFormScreenState();
+  ConsumerState<EventFormScreen> createState() => _EventFormScreenState();
 }
 
-class _EventFormScreenState extends State<EventFormScreen> {
+class _EventFormScreenState extends ConsumerState<EventFormScreen> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _titleController;
   late TextEditingController _descriptionController;
@@ -25,6 +28,7 @@ class _EventFormScreenState extends State<EventFormScreen> {
   late bool _allDay;
   RecurrenceRule? _recurrenceRule;
   String? _timezone;
+  String _calendarId = kDefaultCalendarId;
 
   bool get _isEditing => widget.existingEvent != null;
 
@@ -51,6 +55,13 @@ class _EventFormScreenState extends State<EventFormScreen> {
     );
     _allDay = event?.allDay ?? false;
     _timezone = event?.timezone;
+    String? selectedCalendarId;
+    try {
+      selectedCalendarId = ref.read(selectedCalendarIdProvider);
+    } catch (_) {
+      selectedCalendarId = null;
+    }
+    _calendarId = event?.calendarId ?? selectedCalendarId ?? kDefaultCalendarId;
 
     if (event?.recurrenceRule != null && event!.recurrenceRule!.isNotEmpty) {
       try {
@@ -127,6 +138,11 @@ class _EventFormScreenState extends State<EventFormScreen> {
                 onChanged: (tz) => setState(() => _timezone = tz),
               ),
             ],
+            const SizedBox(height: 8),
+            _CalendarPickerTile(
+              selectedCalendarId: _calendarId,
+              onChanged: (id) => setState(() => _calendarId = id),
+            ),
             const SizedBox(height: 16),
             if (!_isException) ...[
               _RecurrencePicker(
@@ -199,6 +215,7 @@ class _EventFormScreenState extends State<EventFormScreen> {
           isDirty: true,
         ) ??
         CalendarEvent(
+          calendarId: _calendarId,
           title: _titleController.text.trim(),
           description: _descriptionController.text.trim(),
           start: start,
@@ -210,6 +227,83 @@ class _EventFormScreenState extends State<EventFormScreen> {
         );
 
     Navigator.of(context).pop(event);
+  }
+}
+
+class _CalendarPickerTile extends ConsumerWidget {
+  final String selectedCalendarId;
+  final ValueChanged<String> onChanged;
+
+  const _CalendarPickerTile({
+    required this.selectedCalendarId,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    AsyncValue<List<CalendarInfo>>? calendarsAsync;
+    try {
+      calendarsAsync = ref.watch(calendarsProvider);
+    } catch (_) {
+      calendarsAsync = null;
+    }
+
+    if (calendarsAsync == null) {
+      return const ListTile(
+        leading: Icon(Icons.calendar_month),
+        title: Text('Default calendar'),
+        subtitle: Text('Calendar'),
+        contentPadding: EdgeInsets.zero,
+      );
+    }
+
+    return calendarsAsync.when(
+      data: (calendars) {
+        final visibleCalendars = calendars.where((c) => c.isVisible).toList();
+        if (visibleCalendars.isEmpty) {
+          return const ListTile(
+            leading: Icon(Icons.calendar_month),
+            title: Text('Calendar'),
+            subtitle: Text('Default'),
+            contentPadding: EdgeInsets.zero,
+          );
+        }
+
+        final selected = visibleCalendars.cast<CalendarInfo?>().firstWhere(
+          (c) => c?.id == selectedCalendarId,
+          orElse: () => visibleCalendars.first,
+        )!;
+
+        return ListTile(
+          leading: const Icon(Icons.calendar_month),
+          title: Text(selected.name),
+          subtitle: const Text('Calendar'),
+          contentPadding: EdgeInsets.zero,
+          trailing: DropdownButton<String>(
+            value: selected.id,
+            underline: const SizedBox.shrink(),
+            items: [
+              for (final calendar in visibleCalendars)
+                DropdownMenuItem(
+                  value: calendar.id,
+                  child: Text(calendar.name),
+                ),
+            ],
+            onChanged: (value) {
+              if (value == null) return;
+              onChanged(value);
+            },
+          ),
+        );
+      },
+      loading: () => const ListTile(
+        leading: Icon(Icons.calendar_month),
+        title: Text('Calendar'),
+        subtitle: Text('Loading...'),
+        contentPadding: EdgeInsets.zero,
+      ),
+      error: (_, __) => const SizedBox.shrink(),
+    );
   }
 }
 
@@ -285,8 +379,8 @@ class _TimezonePickerSheetState extends State<_TimezonePickerSheet> {
       _filtered = lower.isEmpty
           ? _allTimezones
           : _allTimezones
-              .where((tz) => tz.toLowerCase().contains(lower))
-              .toList();
+                .where((tz) => tz.toLowerCase().contains(lower))
+                .toList();
     });
   }
 

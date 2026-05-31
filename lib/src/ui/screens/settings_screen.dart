@@ -1,11 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 import '../../bridge/sia_bridge.dart';
-import '../../database/database.dart';
+import '../../models/calendar.dart';
+import '../../models/event.dart';
 import '../../repositories/calendar_repository.dart';
 import '../../services/auth_service.dart';
 import '../../services/ics_import_service.dart';
 import '../../services/timezone_service.dart';
+
+const _calendarPalette = <String>[
+  '#1ED660',
+  '#FF6B6B',
+  '#4ECDC4',
+  '#3B82F6',
+  '#F59E0B',
+  '#8B5CF6',
+  '#10B981',
+];
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -35,6 +47,14 @@ class SettingsScreen extends ConsumerWidget {
           _SectionHeader('Calendar'),
           _CalendarNameTile(),
           _CalendarTimezoneTile(),
+          ListTile(
+            leading: const Icon(Icons.calendar_view_month),
+            title: const Text('Manage Calendars'),
+            subtitle: const Text('Add calendars and toggle visibility'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const _ManageCalendarsScreen()),
+            ),
+          ),
           ListTile(
             leading: const Icon(Icons.upload_file),
             title: const Text('Import Calendar File'),
@@ -285,16 +305,22 @@ class _SyncStatusTile extends ConsumerWidget {
 class _CalendarNameTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final dbAsync = ref.watch(appDatabaseProvider);
-    return dbAsync.when(
-      data: (db) {
-        final manifest = db.getManifest();
+    final calendarsAsync = ref.watch(calendarsProvider);
+    final selectedId =
+        ref.watch(selectedCalendarIdProvider) ?? kDefaultCalendarId;
+    return calendarsAsync.when(
+      data: (calendars) {
+        final selected = calendars.cast<CalendarInfo?>().firstWhere(
+          (c) => c?.id == selectedId,
+          orElse: () => null,
+        );
         return ListTile(
           leading: const Icon(Icons.edit),
           title: const Text('Calendar Name'),
-          subtitle: Text(manifest?.calendarName ?? 'My Calendar'),
-          onTap: () =>
-              _editName(context, db, manifest?.calendarName ?? 'My Calendar'),
+          subtitle: Text(selected?.name ?? 'My Calendar'),
+          onTap: selected == null
+              ? null
+              : () => _editName(context, ref, selected),
         );
       },
       loading: () => const ListTile(title: Text('Calendar Name')),
@@ -302,8 +328,8 @@ class _CalendarNameTile extends ConsumerWidget {
     );
   }
 
-  void _editName(BuildContext context, AppDatabase db, String current) {
-    final controller = TextEditingController(text: current);
+  void _editName(BuildContext context, WidgetRef ref, CalendarInfo calendar) {
+    final controller = TextEditingController(text: calendar.name);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -322,7 +348,14 @@ class _CalendarNameTile extends ConsumerWidget {
             onPressed: () {
               final name = controller.text.trim();
               if (name.isNotEmpty) {
-                db.upsertManifest(calendarName: name);
+                final repo = ref.read(calendarRepositoryProvider).value;
+                repo?.upsertCalendar(
+                  calendar.copyWith(
+                    name: name,
+                    updatedAt: DateTime.now().toUtc(),
+                  ),
+                );
+                ref.invalidate(calendarsProvider);
               }
               Navigator.pop(ctx);
             },
@@ -337,16 +370,23 @@ class _CalendarNameTile extends ConsumerWidget {
 class _CalendarTimezoneTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final dbAsync = ref.watch(appDatabaseProvider);
-    return dbAsync.when(
-      data: (db) {
-        final manifest = db.getManifest();
-        final current = manifest?.timezone ?? 'UTC';
+    final calendarsAsync = ref.watch(calendarsProvider);
+    final selectedId =
+        ref.watch(selectedCalendarIdProvider) ?? kDefaultCalendarId;
+    return calendarsAsync.when(
+      data: (calendars) {
+        final selected = calendars.cast<CalendarInfo?>().firstWhere(
+          (c) => c?.id == selectedId,
+          orElse: () => null,
+        );
+        final current = selected?.timezone ?? 'UTC';
         return ListTile(
           leading: const Icon(Icons.language),
           title: const Text('Calendar Timezone'),
           subtitle: Text(current),
-          onTap: () => _pickTimezone(context, db, current),
+          onTap: selected == null
+              ? null
+              : () => _pickTimezone(context, ref, selected, current),
         );
       },
       loading: () => const ListTile(title: Text('Calendar Timezone')),
@@ -356,11 +396,11 @@ class _CalendarTimezoneTile extends ConsumerWidget {
 
   Future<void> _pickTimezone(
     BuildContext context,
-    AppDatabase db,
+    WidgetRef ref,
+    CalendarInfo calendar,
     String current,
   ) async {
     final allTimezones = TimezoneService.getAllTimezones();
-    String filter = '';
     List<String> filtered = allTimezones;
 
     final selected = await showModalBottomSheet<String>(
@@ -396,14 +436,14 @@ class _CalendarTimezoneTile extends ConsumerWidget {
                           onChanged: (q) {
                             final lower = q.toLowerCase();
                             setModalState(() {
-                              filter = lower;
                               filtered = lower.isEmpty
                                   ? allTimezones
                                   : allTimezones
-                                      .where(
-                                        (tz) => tz.toLowerCase().contains(lower),
-                                      )
-                                      .toList();
+                                        .where(
+                                          (tz) =>
+                                              tz.toLowerCase().contains(lower),
+                                        )
+                                        .toList();
                             });
                           },
                           autofocus: true,
@@ -434,7 +474,166 @@ class _CalendarTimezoneTile extends ConsumerWidget {
     );
 
     if (selected != null && selected != current) {
-      db.upsertManifest(timezone: selected);
+      final repo = ref.read(calendarRepositoryProvider).value;
+      repo?.upsertCalendar(
+        calendar.copyWith(
+          timezone: selected,
+          updatedAt: DateTime.now().toUtc(),
+        ),
+      );
+      ref.invalidate(calendarsProvider);
     }
   }
+}
+
+class _ManageCalendarsScreen extends ConsumerWidget {
+  const _ManageCalendarsScreen();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final calendarsAsync = ref.watch(calendarsProvider);
+    final selected =
+        ref.watch(selectedCalendarIdProvider) ?? kDefaultCalendarId;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Manage Calendars')),
+      body: calendarsAsync.when(
+        data: (calendars) => ListView(
+          children: [
+            for (final calendar in calendars)
+              SwitchListTile(
+                secondary: CircleAvatar(
+                  radius: 9,
+                  backgroundColor: _parseHexColor(calendar.color),
+                ),
+                title: Text(calendar.name),
+                subtitle: Text(calendar.timezone),
+                value: calendar.isVisible,
+                onChanged: (value) {
+                  final repo = ref.read(calendarRepositoryProvider).value;
+                  repo?.upsertCalendar(
+                    calendar.copyWith(
+                      isVisible: value,
+                      updatedAt: DateTime.now().toUtc(),
+                    ),
+                  );
+                  ref.invalidate(calendarsProvider);
+                  ref.invalidate(eventsForDayProvider);
+                },
+              ),
+            const Divider(height: 1),
+            for (final calendar in calendars)
+              RadioListTile<String>(
+                title: Text('Default for new events: ${calendar.name}'),
+                value: calendar.id,
+                groupValue: selected,
+                onChanged: (value) {
+                  ref.read(selectedCalendarIdProvider.notifier).set(value);
+                },
+              ),
+          ],
+        ),
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('Error: $e')),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _addCalendar(context, ref),
+        icon: const Icon(Icons.add),
+        label: const Text('Add'),
+      ),
+    );
+  }
+
+  Future<void> _addCalendar(BuildContext context, WidgetRef ref) async {
+    final nameController = TextEditingController();
+    var color =
+        _calendarPalette[DateTime.now().millisecond % _calendarPalette.length];
+    final selectedTimezone = await TimezoneService.getDeviceTimezone();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('New Calendar'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: nameController,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'Calendar name'),
+              ),
+              const SizedBox(height: 12),
+              const Text('Color'),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final swatch in _calendarPalette)
+                    GestureDetector(
+                      onTap: () => setDialogState(() => color = swatch),
+                      child: CircleAvatar(
+                        radius: 12,
+                        backgroundColor: _parseHexColor(swatch),
+                        child: color == swatch
+                            ? const Icon(
+                                Icons.check,
+                                size: 14,
+                                color: Colors.white,
+                              )
+                            : null,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Create'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed != true) return;
+    final name = nameController.text.trim();
+    if (name.isEmpty) return;
+
+    final now = DateTime.now().toUtc();
+    final newCalendar = CalendarInfo(
+      id: const Uuid().v4(),
+      name: name,
+      timezone: selectedTimezone,
+      color: color,
+      isVisible: true,
+      sortOrder: DateTime.now().millisecondsSinceEpoch,
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    final repo = ref.read(calendarRepositoryProvider).value;
+    repo?.upsertCalendar(newCalendar);
+    ref.invalidate(calendarsProvider);
+    ref.read(selectedCalendarIdProvider.notifier).set(newCalendar.id);
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Added calendar "${newCalendar.name}"')),
+      );
+    }
+  }
+}
+
+Color _parseHexColor(String value) {
+  final cleaned = value.replaceAll('#', '').trim();
+  final normalized = cleaned.length == 6 ? 'FF$cleaned' : cleaned;
+  final parsed = int.tryParse(normalized, radix: 16);
+  if (parsed == null) return Colors.blueGrey;
+  return Color(parsed);
 }

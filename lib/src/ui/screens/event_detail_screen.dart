@@ -57,6 +57,8 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final calendarLookup = ref.watch(calendarLookupProvider).value ?? const {};
+    final calendar = calendarLookup[event.calendarId];
     final start = _displayStart ?? event.start;
     final end = _displayEnd ?? event.end;
     return Scaffold(
@@ -92,6 +94,10 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
             if (!event.allDay && event.timezone != null) ...[
               _InfoRow(icon: Icons.language, label: _timezoneLabel(start)),
             ],
+            _InfoRow(
+              icon: Icons.calendar_month,
+              label: calendar?.name ?? 'Calendar',
+            ),
             if (event.location.isNotEmpty)
               _InfoRow(
                 icon: Icons.location_on,
