@@ -9,7 +9,7 @@ class FakeCalendarRepository implements CalendarRepository {
   final Map<String, CalendarEvent> masterEvents = <String, CalendarEvent>{};
 
   @override
-  void createEvent(CalendarEvent event) {
+  void createEvent(CalendarEvent event, {bool refreshNotifications = true}) {
     savedEvents.add(event);
     if (event.masterEventId == null) {
       masterEvents[event.id] = event;
@@ -19,6 +19,12 @@ class FakeCalendarRepository implements CalendarRepository {
   @override
   CalendarEvent? getMasterEvent(String masterEventId) =>
       masterEvents[masterEventId];
+
+  @override
+  List<int> getDefaultEventReminderMinutes() => const [15];
+
+  @override
+  void refreshNotifications() {}
 
   @override
   String getCalendarTimezone({String? calendarId}) => 'UTC';

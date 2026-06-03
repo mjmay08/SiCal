@@ -5,6 +5,7 @@ import '../../models/event.dart';
 import '../../models/recurrence.dart';
 import '../../repositories/calendar_repository.dart';
 import '../../services/timezone_service.dart';
+import '../widgets/reminder_minutes_picker.dart';
 
 class EventFormScreen extends ConsumerStatefulWidget {
   final CalendarEvent? existingEvent;
@@ -29,6 +30,7 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
   RecurrenceRule? _recurrenceRule;
   String? _timezone;
   String _calendarId = kDefaultCalendarId;
+  List<int>? _reminderMinutes;
 
   bool get _isEditing => widget.existingEvent != null;
 
@@ -55,6 +57,7 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
     );
     _allDay = event?.allDay ?? false;
     _timezone = event?.timezone;
+    _reminderMinutes = event?.reminderMinutes;
     String? selectedCalendarId;
     try {
       selectedCalendarId = ref.read(selectedCalendarIdProvider);
@@ -75,6 +78,8 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
         if (mounted) setState(() => _timezone = tz);
       });
     }
+
+    _loadDefaultRemindersIfNeeded();
   }
 
   @override
@@ -83,6 +88,15 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
     _descriptionController.dispose();
     _locationController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadDefaultRemindersIfNeeded() async {
+    if (_isEditing || _reminderMinutes != null) return;
+    final repository = await ref.read(calendarRepositoryProvider.future);
+    if (!mounted || _reminderMinutes != null) return;
+    setState(
+      () => _reminderMinutes = repository.getDefaultEventReminderMinutes(),
+    );
   }
 
   @override
@@ -151,6 +165,14 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
               ),
               const SizedBox(height: 16),
             ],
+            ReminderMinutesPickerTile(
+              reminderMinutes: _reminderMinutes ?? const [],
+              title: 'Alerts',
+              subtitle: 'Remind me',
+              onChanged: (minutes) =>
+                  setState(() => _reminderMinutes = minutes),
+            ),
+            const SizedBox(height: 16),
             TextFormField(
               controller: _locationController,
               decoration: const InputDecoration(
@@ -212,6 +234,7 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
               ? widget.existingEvent!.recurrenceRule
               : _recurrenceRule?.encode(),
           timezone: _allDay ? null : _timezone,
+          reminderMinutes: _reminderMinutes ?? const [],
           isDirty: true,
         ) ??
         CalendarEvent(
@@ -224,6 +247,7 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
           location: _locationController.text.trim(),
           recurrenceRule: _recurrenceRule?.encode(),
           timezone: _allDay ? null : _timezone,
+          reminderMinutes: _reminderMinutes ?? const [],
         );
 
     Navigator.of(context).pop(event);

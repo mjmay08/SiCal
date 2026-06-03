@@ -4,6 +4,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'src/app.dart';
 import 'src/bridge/sia_bridge.dart';
 import 'src/services/calendar_file_open_service.dart';
+import 'src/services/event_notification_service.dart';
 import 'src/services/sync_foreground_service.dart';
 import 'src/services/timezone_service.dart';
 
@@ -15,6 +16,7 @@ Future<void> main() async {
   FlutterForegroundTask.initCommunicationPort();
   SyncForegroundService.init();
   TimezoneService.initialize();
+  await EventNotificationService.initialize();
   await SiaBridge.init();
   await CalendarFileOpenService.instance.initialize();
   await SyncForegroundService.startIosBackgroundSyncScheduler();

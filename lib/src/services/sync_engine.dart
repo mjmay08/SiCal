@@ -5,6 +5,7 @@ import '../bridge/sia_bridge.dart' show SiaBridge;
 import '../database/database.dart';
 import '../models/chunk.dart';
 import '../models/event.dart';
+import 'event_notification_service.dart';
 import '../ui/widgets/sync_status_banner.dart';
 import 'sia_storage_service.dart';
 
@@ -54,6 +55,8 @@ class SyncEngine {
       await pullChanges(calendarId: calendarId, onProgress: onProgress);
       await pushChanges(calendarId: calendarId, onProgress: onProgress);
     }
+
+    unawaited(EventNotificationService.rescheduleAll(_db));
 
     onProgress?.call(phase: SyncPhase.done, message: 'Sync complete');
     _log('fullSync DONE');

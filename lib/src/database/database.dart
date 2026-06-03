@@ -87,6 +87,12 @@ class AppDatabase {
         last_sync_at TEXT
       )
     ''');
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    ''');
     // Migration: add cursor_id if missing (table created before it existed).
     final cols = _db.select("PRAGMA table_info('sync_state')");
     if (!cols.any((r) => r['name'] == 'cursor_id')) {
@@ -265,6 +271,7 @@ class AppDatabase {
     _db.execute('DELETE FROM chunks');
     _db.execute('DELETE FROM manifest');
     _db.execute('DELETE FROM sync_state');
+    _db.execute('DELETE FROM app_settings');
     _seedDefaultCalendarFromManifest();
   }
 
@@ -488,6 +495,37 @@ class AppDatabase {
       period,
       calendarId ?? kDefaultCalendarId,
     ]);
+  }
+
+  // -----------------------------------------------------------------------
+  // App settings
+  // -----------------------------------------------------------------------
+
+  static const _defaultEventRemindersKey = 'default_event_reminders_json';
+
+  List<int> getDefaultEventReminderMinutes() {
+    final result = _db.select('SELECT value FROM app_settings WHERE key = ?', [
+      _defaultEventRemindersKey,
+    ]);
+    if (result.isEmpty) return const [15];
+    try {
+      final parsed =
+          jsonDecode(result.first['value'] as String) as List<dynamic>;
+      return parsed.map((e) => e as int).toList()..sort();
+    } catch (_) {
+      return const [15];
+    }
+  }
+
+  void setDefaultEventReminderMinutes(List<int> reminderMinutes) {
+    final normalized = reminderMinutes.toSet().toList()..sort();
+    _db.execute(
+      '''
+      INSERT OR REPLACE INTO app_settings (key, value)
+      VALUES (?, ?)
+      ''',
+      [_defaultEventRemindersKey, jsonEncode(normalized)],
+    );
   }
 
   List<String> getAllChunkPeriods({String? calendarId}) {

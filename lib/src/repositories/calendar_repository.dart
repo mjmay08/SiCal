@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
@@ -5,6 +7,7 @@ import '../database/database.dart';
 import '../models/calendar.dart';
 import '../models/event.dart';
 import '../models/recurrence.dart';
+import '../services/event_notification_service.dart';
 import '../services/sia_storage_service.dart';
 import '../services/sync_engine.dart';
 import '../services/timezone_service.dart';
@@ -30,6 +33,13 @@ final calendarRepositoryProvider = FutureProvider<CalendarRepository>((
 ) async {
   final db = await ref.watch(appDatabaseProvider.future);
   return CalendarRepository(db);
+});
+
+final defaultEventReminderMinutesProvider = FutureProvider<List<int>>((
+  ref,
+) async {
+  final db = await ref.watch(appDatabaseProvider.future);
+  return db.getDefaultEventReminderMinutes();
 });
 
 final selectedCalendarIdProvider =
@@ -190,24 +200,40 @@ class CalendarRepository {
   CalendarInfo? getCalendarById(String calendarId) =>
       _db.getCalendarById(calendarId);
 
+  CalendarEvent? getEventById(String id) => _db.getEventById(id);
+
   void upsertCalendar(CalendarInfo calendar) => _db.upsertCalendar(calendar);
 
   void deleteCalendar(String calendarId) => _db.deleteCalendar(calendarId);
 
-  void createEvent(CalendarEvent event) {
-    _db.upsertEvent(event);
+  List<int> getDefaultEventReminderMinutes() =>
+      _db.getDefaultEventReminderMinutes();
+
+  void setDefaultEventReminderMinutes(List<int> reminderMinutes) {
+    _db.setDefaultEventReminderMinutes(reminderMinutes);
   }
 
-  void updateEvent(CalendarEvent event) {
+  void refreshNotifications() {
+    unawaited(EventNotificationService.rescheduleAll(_db));
+  }
+
+  void createEvent(CalendarEvent event, {bool refreshNotifications = true}) {
+    _db.upsertEvent(event);
+    if (refreshNotifications) this.refreshNotifications();
+  }
+
+  void updateEvent(CalendarEvent event, {bool refreshNotifications = true}) {
     final updated = event.copyWith(
       isDirty: true,
       updatedAt: DateTime.now().toUtc(),
     );
     _db.upsertEvent(updated);
+    if (refreshNotifications) this.refreshNotifications();
   }
 
-  void deleteEvent(String id) {
+  void deleteEvent(String id, {bool refreshNotifications = true}) {
     _db.deleteEvent(id);
+    if (refreshNotifications) this.refreshNotifications();
   }
 
   void editSingleOccurrence(
@@ -224,6 +250,7 @@ class CalendarRepository {
       instanceStart: null,
     );
     _db.upsertEvent(exception);
+    refreshNotifications();
   }
 
   void deleteSingleOccurrence(
@@ -240,6 +267,7 @@ class CalendarRepository {
       instanceStart: null,
     );
     _db.upsertEvent(exception);
+    refreshNotifications();
   }
 
   void editThisAndFollowing(
@@ -271,6 +299,7 @@ class CalendarRepository {
       instanceStart: null,
     );
     _db.upsertEvent(newMaster);
+    refreshNotifications();
   }
 
   void deleteThisAndFollowing(CalendarEvent master, DateTime splitDate) {
@@ -287,6 +316,7 @@ class CalendarRepository {
       instanceStart: null,
     );
     _db.upsertEvent(updatedMaster);
+    refreshNotifications();
   }
 
   void editAllOccurrences(CalendarEvent master, CalendarEvent edited) {
@@ -299,10 +329,12 @@ class CalendarRepository {
       instanceStart: null,
     );
     _db.upsertEvent(updated);
+    refreshNotifications();
   }
 
   void deleteAllOccurrences(String masterId) {
     _db.deleteEvent(masterId);
+    refreshNotifications();
   }
 
   CalendarEvent? getMasterEvent(String masterEventId) {

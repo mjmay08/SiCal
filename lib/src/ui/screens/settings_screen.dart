@@ -6,8 +6,10 @@ import '../../models/calendar.dart';
 import '../../models/event.dart';
 import '../../repositories/calendar_repository.dart';
 import '../../services/auth_service.dart';
+import '../../services/event_notification_service.dart';
 import '../../services/ics_import_service.dart';
 import '../../services/timezone_service.dart';
+import '../widgets/reminder_minutes_picker.dart';
 
 const _calendarPalette = <String>[
   '#1ED660',
@@ -47,6 +49,7 @@ class SettingsScreen extends ConsumerWidget {
           _SectionHeader('Calendar'),
           _CalendarNameTile(),
           _CalendarTimezoneTile(),
+          const _DefaultAlertTile(),
           ListTile(
             leading: const Icon(Icons.calendar_view_month),
             title: const Text('Manage Calendars'),
@@ -151,6 +154,7 @@ class SettingsScreen extends ConsumerWidget {
               Navigator.pop(ctx);
               final auth = ref.read(authServiceProvider);
               await auth.clearAll();
+              await EventNotificationService.clearAll();
               ref.invalidate(authStateProvider);
               if (context.mounted) {
                 Navigator.of(context).popUntil((route) => route.isFirst);
@@ -214,6 +218,7 @@ class SettingsScreen extends ConsumerWidget {
       final deleted = await SiaBridge.deleteAllObjects();
       final db = await ref.read(appDatabaseProvider.future);
       db.clearAllTables();
+      await EventNotificationService.clearAll();
       ref.invalidate(eventsForDayProvider);
 
       if (context.mounted) {
@@ -483,6 +488,49 @@ class _CalendarTimezoneTile extends ConsumerWidget {
       );
       ref.invalidate(calendarsProvider);
     }
+  }
+}
+
+class _DefaultAlertTile extends ConsumerWidget {
+  const _DefaultAlertTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final reminderMinutesAsync = ref.watch(defaultEventReminderMinutesProvider);
+    return reminderMinutesAsync.when(
+      data: (reminderMinutes) => ListTile(
+        leading: const Icon(Icons.notifications_active_outlined),
+        title: const Text('Default Event Alert'),
+        subtitle: Text(formatReminderMinutes(reminderMinutes)),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => _editDefaultAlert(context, ref, reminderMinutes),
+      ),
+      loading: () => const ListTile(
+        leading: Icon(Icons.notifications_active_outlined),
+        title: Text('Default Event Alert'),
+        subtitle: Text('Loading...'),
+      ),
+      error: (_, __) => const SizedBox.shrink(),
+    );
+  }
+
+  Future<void> _editDefaultAlert(
+    BuildContext context,
+    WidgetRef ref,
+    List<int> reminderMinutes,
+  ) async {
+    final updated = await showModalBottomSheet<List<int>>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => ReminderMinutesPickerSheet(
+        title: 'Default Event Alert',
+        initialReminderMinutes: reminderMinutes,
+      ),
+    );
+    if (updated == null) return;
+    final repository = await ref.read(calendarRepositoryProvider.future);
+    repository.setDefaultEventReminderMinutes(updated);
+    ref.invalidate(defaultEventReminderMinutesProvider);
   }
 }
 
