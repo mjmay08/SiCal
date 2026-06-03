@@ -67,7 +67,7 @@ class IcsImportService {
         continue;
       }
 
-      _repository.createEvent(imported);
+      _repository.createEvent(imported, refreshNotifications: false);
       mastersByUid[uid] = imported;
       importedCount++;
     }
@@ -90,6 +90,7 @@ class IcsImportService {
           isDirty: true,
           instanceStart: null,
         ),
+        refreshNotifications: false,
       );
       importedCount++;
     }
@@ -115,6 +116,7 @@ class IcsImportService {
             isDirty: true,
             instanceStart: null,
           ),
+          refreshNotifications: false,
         );
         importedCount++;
         continue;
@@ -139,8 +141,13 @@ class IcsImportService {
           isDirty: true,
           instanceStart: null,
         ),
+        refreshNotifications: false,
       );
       importedCount++;
+    }
+
+    if (importedCount > 0) {
+      _repository.refreshNotifications();
     }
 
     return IcsImportResult(
@@ -320,7 +327,7 @@ class IcsImportService {
       end: end,
       allDay: isAllDay,
       recurrenceRule: _parseRRule(component['rrule'] as String?),
-      reminderMinutes: const <int>[15],
+      reminderMinutes: _repository.getDefaultEventReminderMinutes(),
       location: (component['location'] as String?)?.trim() ?? '',
       timezone: eventTimezone,
       isDirty: true,

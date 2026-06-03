@@ -41,7 +41,7 @@ class CalendarEvent {
     required this.end,
     this.allDay = false,
     this.recurrenceRule,
-    this.reminderMinutes = const [15],
+    this.reminderMinutes = const [],
     this.location = '',
     String? period,
     DateTime? createdAt,
@@ -153,7 +153,7 @@ class CalendarEvent {
         (json['reminder_minutes'] as List<dynamic>?)
             ?.map((e) => e as int)
             .toList() ??
-        const [15],
+        const [],
     location: json['location'] as String? ?? '',
     createdAt: DateTime.parse(json['created_at'] as String),
     updatedAt: DateTime.parse(json['updated_at'] as String),

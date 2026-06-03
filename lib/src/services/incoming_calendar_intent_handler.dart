@@ -32,7 +32,8 @@ Future<void> handleIncomingCalendarText({
       ),
     );
     if (saved == null) return;
-    repository.createEvent(saved);
+    repository.createEvent(saved, refreshNotifications: false);
+    repository.refreshNotifications();
     onImported?.call();
     if (!messenger.mounted) return;
     var message = 'Imported 1 item';
@@ -48,8 +49,9 @@ Future<void> handleIncomingCalendarText({
   switch (choice) {
     case _ImportAllChoice():
       for (final draft in parsed.drafts) {
-        repository.createEvent(draft);
+        repository.createEvent(draft, refreshNotifications: false);
       }
+      repository.refreshNotifications();
       onImported?.call();
       if (!messenger.mounted) return;
       var message = 'Imported ${parsed.drafts.length} items';
@@ -64,7 +66,8 @@ Future<void> handleIncomingCalendarText({
         ),
       );
       if (saved == null) return;
-      repository.createEvent(saved);
+      repository.createEvent(saved, refreshNotifications: false);
+      repository.refreshNotifications();
       onImported?.call();
       if (!messenger.mounted) return;
       final remaining = parsed.drafts.length - 1;

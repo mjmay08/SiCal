@@ -28,6 +28,7 @@ dependencies:
   timezone: ^0.9.4
   flutter_timezone: ^3.0.1
   flutter_foreground_task: ^9.0.0
+  flutter_local_notifications: ^17.2.2
 
 dev_dependencies:
   flutter_test:

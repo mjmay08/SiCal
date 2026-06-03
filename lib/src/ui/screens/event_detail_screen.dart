@@ -5,6 +5,7 @@ import '../../models/event.dart';
 import '../../models/recurrence.dart';
 import '../../repositories/calendar_repository.dart';
 import '../../services/timezone_service.dart';
+import '../widgets/reminder_minutes_picker.dart';
 import 'event_form_screen.dart';
 
 class EventDetailScreen extends ConsumerStatefulWidget {
@@ -120,15 +121,13 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
               const SizedBox(height: 4),
               Text(event.description),
             ],
-            if (event.reminderMinutes.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              _InfoRow(
-                icon: Icons.notifications,
-                label: event.reminderMinutes
-                    .map((m) => '${m}min before')
-                    .join(', '),
-              ),
-            ],
+            const SizedBox(height: 16),
+            _InfoRow(
+              icon: event.reminderMinutes.isEmpty
+                  ? Icons.notifications_off
+                  : Icons.notifications,
+              label: formatReminderMinutes(event.reminderMinutes),
+            ),
             const Spacer(),
             if (event.isDirty)
               Chip(
