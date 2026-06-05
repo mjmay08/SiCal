@@ -7,11 +7,6 @@ const _keyAppKey = 'sia_app_key_hex';
 const _keyIndexerUrl = 'sia_indexer_url';
 const _defaultIndexerUrl = 'https://sia.storage';
 
-// App ID: Generate ONCE and keep stable forever.
-// Replace with a real 32-byte hex-encoded App ID before release.
-const siaAppId =
-    '0000000000000000000000000000000000000000000000000000000000000001';
-
 final authServiceProvider = Provider<AuthService>((ref) => AuthService());
 
 final authStateProvider = FutureProvider<bool>((ref) async {

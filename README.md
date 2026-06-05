@@ -4,7 +4,7 @@ SiCal is a calendar app for iOS and Android powered by the Sia Network.
 
 ## Prerequisites
 
-- Flutter SDK compatible with Dart 3.9.x
+- Flutter SDK compatible with Dart 3.10+
 - Rust toolchain (`rustup`, `cargo`)
 - Android Studio / Android SDK for Android builds
 - Xcode for iOS builds (macOS only)
@@ -26,12 +26,9 @@ From the repository root:
 flutter pub get
 ```
 
-This project includes generated flutter_rust_bridge bindings in `lib/src/rust/`.
-If Rust API changes require regeneration, use flutter_rust_bridge tooling and then run:
-
-```bash
-flutter pub get
-```
+The app uses the hosted `sia_storage` package for Sia SDK bindings.
+Its native library is compiled at build time via Dart build hooks, so keep the
+Rust toolchain available on developer machines and CI.
 
 ## Run The App
 
@@ -93,16 +90,6 @@ Format Dart code:
 
 ```bash
 dart format .
-```
-
-## Rust Development
-
-Run Rust checks inside the Rust crate:
-
-```bash
-cd rust
-cargo check
-cargo test
 ```
 
 ## Assets And Native UI Generation
