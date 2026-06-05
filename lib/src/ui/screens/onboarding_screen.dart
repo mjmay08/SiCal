@@ -303,9 +303,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  void _generatePhrase() {
+  Future<void> _generatePhrase() async {
+    final phrase = await SiaBridge.generateRecoveryPhrase();
+    if (!mounted) return;
     setState(() {
-      _recoveryPhrase = SiaBridge.generateRecoveryPhrase();
+      _recoveryPhrase = phrase;
     });
     _goToPage(2);
   }
