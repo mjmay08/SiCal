@@ -410,7 +410,10 @@ class AppDatabase {
   }) {
     final result = _selectEventsWithCalendarFilter(
       where: '''recurrence_rule IS NOT NULL
-           AND master_event_id IS NULL
+           AND TRIM(recurrence_rule) != ''
+           AND (master_event_id IS NULL
+                OR TRIM(master_event_id) = ''
+                OR LOWER(TRIM(master_event_id)) = 'null')
            AND is_deleted = 0
            AND start <= ?''',
       params: [to.toIso8601String()],
@@ -442,7 +445,7 @@ class AppDatabase {
     final result = _selectEventsWithCalendarFilter(
       where: '''start >= ? AND start < ?
            AND (recurrence_rule IS NULL OR recurrence_rule = '')
-           AND master_event_id IS NULL
+           AND (master_event_id IS NULL OR TRIM(master_event_id) = '')
            AND is_deleted = 0''',
       params: [from.toIso8601String(), to.toIso8601String()],
       calendarIds: calendarIds,
@@ -727,16 +730,27 @@ class AppDatabase {
     start: DateTime.parse(r['start'] as String),
     end: DateTime.parse(r['end'] as String),
     allDay: (r['all_day'] as int) == 1,
-    recurrenceRule: r['recurrence_rule'] as String?,
+    recurrenceRule:
+        ((r['recurrence_rule'] as String?)?.trim().isNotEmpty ?? false)
+        ? (r['recurrence_rule'] as String).trim()
+        : null,
     reminderMinutes: _parseReminders(r['reminders_json'] as String),
     location: r['location'] as String? ?? '',
     period: r['period'] as String,
     createdAt: DateTime.parse(r['created_at'] as String),
     updatedAt: DateTime.parse(r['updated_at'] as String),
     isDirty: (r['is_dirty'] as int) == 1,
-    timezone: r['timezone'] as String?,
-    masterEventId: r['master_event_id'] as String?,
-    originalStart: r['original_start'] as String?,
+    timezone: ((r['timezone'] as String?)?.trim().isNotEmpty ?? false)
+        ? (r['timezone'] as String).trim()
+        : null,
+    masterEventId:
+        ((r['master_event_id'] as String?)?.trim().isNotEmpty ?? false)
+        ? (r['master_event_id'] as String).trim()
+        : null,
+    originalStart:
+        ((r['original_start'] as String?)?.trim().isNotEmpty ?? false)
+        ? (r['original_start'] as String).trim()
+        : null,
     isCancelled: (r['is_cancelled'] as int?) == 1,
   );
 
