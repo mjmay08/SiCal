@@ -90,13 +90,28 @@ DateTime effectiveDisplayStart(CalendarEvent event, String? deviceTz) {
   }
 }
 
+DateTime effectiveOccurrenceStart(CalendarEvent event, String? deviceTz) {
+  final start = event.instanceStart ?? event.start;
+  if (event.allDay || event.timezone == null || deviceTz == null) {
+    return start;
+  }
+  if (deviceTz == event.timezone) return start;
+  try {
+    return TimezoneService.convertToTimezone(start, event.timezone!, deviceTz);
+  } catch (_) {
+    return start;
+  }
+}
+
 final eventsForDayProvider =
     FutureProvider.family<List<CalendarEvent>, DateTime>((ref, day) async {
       final repo = await ref.watch(calendarRepositoryProvider.future);
-      final visibleCalendarIds = await ref.watch(
-        visibleCalendarIdsProvider.future,
-      );
-      final deviceTz = ref.watch(deviceTimezoneProvider).asData?.value;
+      String? deviceTz;
+      try {
+        // Ensure timezone-aware events are filtered against the selected day
+        // using the same resolved device timezone as month markers.
+        deviceTz = await ref.watch(deviceTimezoneProvider.future);
+      } catch (_) {}
 
       final from = DateTime(
         day.year,
@@ -108,24 +123,20 @@ final eventsForDayProvider =
         day.month,
         day.day,
       ).add(const Duration(days: 2));
-      final candidates = repo.getEventsInRange(
-        from,
-        to,
-        calendarIds: visibleCalendarIds,
-      );
+      final candidates = repo.getEventsInRange(from, to);
 
       final dayStart = DateTime(day.year, day.month, day.day);
       final dayEnd = dayStart.add(const Duration(days: 1));
 
       final results =
           candidates.where((e) {
-            final start = effectiveDisplayStart(e, deviceTz);
+            final start = effectiveOccurrenceStart(e, deviceTz);
             return !start.isBefore(dayStart) && start.isBefore(dayEnd);
           }).toList()..sort(
-            (a, b) => effectiveDisplayStart(
+            (a, b) => effectiveOccurrenceStart(
               a,
               deviceTz,
-            ).compareTo(effectiveDisplayStart(b, deviceTz)),
+            ).compareTo(effectiveOccurrenceStart(b, deviceTz)),
           );
       return results;
     });

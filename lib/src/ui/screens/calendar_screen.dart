@@ -64,6 +64,38 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
   /// Normalise to midnight for event-day lookup.
   DateTime _normalizeDay(DateTime d) => DateTime(d.year, d.month, d.day);
 
+  Widget _buildDayCell(
+    BuildContext context,
+    DateTime day, {
+    bool isSelected = false,
+    bool isToday = false,
+    bool isOutside = false,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final borderColor = isSelected ? scheme.primary : Colors.transparent;
+    final textColor = isOutside
+        ? scheme.outline
+        : (isSelected ? scheme.onSurface : null);
+
+    return Container(
+      margin: const EdgeInsets.all(1.5),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: isToday ? scheme.primary.withAlpha(80) : Colors.transparent,
+        border: Border.all(color: borderColor, width: isSelected ? 1.8 : 1),
+      ),
+      alignment: Alignment.topCenter,
+      padding: const EdgeInsets.only(top: 4),
+      child: Text(
+        '${day.day}',
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: textColor,
+          fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+        ),
+      ),
+    );
+  }
+
   /// Load all visible events for the current month into the marker map.
   Future<void> _loadVisibleEvents() async {
     // Extend the query window by ±1 day at both ends so that events whose
@@ -108,6 +140,16 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
     final eventsAsync = ref.watch(
       eventsForDayProvider(_selectedDay ?? _focusedDay),
     );
+    final deviceTz = ref.watch(deviceTimezoneProvider).asData?.value;
+    final selectedDayKey = _normalizeDay(_selectedDay ?? _focusedDay);
+    final markerDayEvents =
+        (_eventsByDay[selectedDayKey] ?? const <CalendarEvent>[]).toList()
+          ..sort(
+            (a, b) => effectiveDisplayStart(
+              a,
+              deviceTz,
+            ).compareTo(effectiveDisplayStart(b, deviceTz)),
+          );
     final calendarLookup = ref.watch(calendarLookupProvider).value ?? const {};
     final dirtyCount = ref
         .watch(appDatabaseProvider)
@@ -162,6 +204,7 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
             firstDay: DateTime(2020),
             lastDay: DateTime(2030),
             focusedDay: _focusedDay,
+            rowHeight: 76,
             calendarFormat: _calendarFormat,
             selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
             eventLoader: (day) => _eventsByDay[_normalizeDay(day)] ?? [],
@@ -178,64 +221,121 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
               _loadVisibleEvents();
             },
             calendarBuilders: CalendarBuilders(
+              selectedBuilder: (context, day, focusedDay) =>
+                  _buildDayCell(context, day, isSelected: true),
+              todayBuilder: (context, day, focusedDay) =>
+                  _buildDayCell(context, day, isToday: true),
+              defaultBuilder: (context, day, focusedDay) =>
+                  _buildDayCell(context, day),
+              outsideBuilder: (context, day, focusedDay) =>
+                  _buildDayCell(context, day, isOutside: true),
               markerBuilder: (context, day, events) {
                 if (events.isEmpty) return const SizedBox.shrink();
-                final colors = <Color>[];
-                for (final item in events.cast<CalendarEvent>()) {
-                  final color = _calendarColor(
-                    calendarLookup[item.calendarId]?.color,
-                    fallback: Theme.of(context).colorScheme.primary,
-                  );
-                  if (!colors.contains(color)) colors.add(color);
-                }
-                final preview = colors.take(3).toList();
-                return Padding(
-                  padding: const EdgeInsets.only(top: 30),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      for (final color in preview)
-                        Container(
-                          width: 6,
-                          height: 6,
-                          margin: const EdgeInsets.symmetric(horizontal: 1),
-                          decoration: BoxDecoration(
-                            color: color,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                    ],
+                final dayEvents = events.cast<CalendarEvent>();
+                final previewEvents = dayEvents.take(2).toList();
+                final remaining = dayEvents.length - previewEvents.length;
+                return Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(3, 22, 3, 3),
+                    child: ClipRect(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (final item in previewEvents)
+                            Text(
+                              item.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    fontSize: 9,
+                                    height: 1.05,
+                                    color: _calendarColor(
+                                      calendarLookup[item.calendarId]?.color,
+                                      fallback: Theme.of(
+                                        context,
+                                      ).colorScheme.primary,
+                                    ),
+                                  ),
+                            ),
+                          if (remaining > 0)
+                            Text(
+                              '+$remaining more',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    fontSize: 8,
+                                    height: 1.0,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.outline,
+                                  ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
                 );
               },
             ),
             calendarStyle: CalendarStyle(
-              todayDecoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary.withAlpha(100),
-                shape: BoxShape.circle,
-              ),
-              selectedDecoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary,
-                shape: BoxShape.circle,
+              cellMargin: const EdgeInsets.all(1.5),
+              cellPadding: const EdgeInsets.all(2),
+              selectedTextStyle: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
           const Divider(height: 1),
           Expanded(
             child: eventsAsync.when(
-              data: (events) => events.isEmpty
-                  ? const Center(child: Text('No events'))
-                  : ListView.builder(
-                      itemCount: events.length,
+              data: (events) {
+                final byKey = <String, CalendarEvent>{
+                  for (final e in events)
+                    '${e.id}|${(e.instanceStart ?? e.start).toIso8601String()}':
+                        e,
+                };
+                for (final e in markerDayEvents) {
+                  final key =
+                      '${e.id}|${(e.instanceStart ?? e.start).toIso8601String()}';
+                  byKey.putIfAbsent(key, () => e);
+                }
+                final displayEvents = byKey.values.toList()
+                  ..sort(
+                    (a, b) => effectiveOccurrenceStart(
+                      a,
+                      deviceTz,
+                    ).compareTo(effectiveOccurrenceStart(b, deviceTz)),
+                  );
+                return displayEvents.isEmpty
+                    ? const Center(child: Text('No events'))
+                    : ListView.builder(
+                        itemCount: displayEvents.length,
+                        itemBuilder: (context, index) {
+                          final event = displayEvents[index];
+                          return _EventListTile(
+                            event: event,
+                            onTap: () => _openEventDetail(event),
+                          );
+                        },
+                      );
+              },
+              loading: () => markerDayEvents.isNotEmpty
+                  ? ListView.builder(
+                      itemCount: markerDayEvents.length,
                       itemBuilder: (context, index) {
-                        final event = events[index];
+                        final event = markerDayEvents[index];
                         return _EventListTile(
                           event: event,
                           onTap: () => _openEventDetail(event),
                         );
                       },
-                    ),
-              loading: () => const Center(child: CircularProgressIndicator()),
+                    )
+                  : const Center(child: CircularProgressIndicator()),
               error: (e, _) => Center(child: Text('Error: $e')),
             ),
           ),

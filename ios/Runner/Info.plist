@@ -67,6 +67,8 @@
 				</array>
 			</dict>
 		</array>
+		<key>LSSupportsOpeningDocumentsInPlace</key>
+		<true/>
 		<key>UIStatusBarHidden</key>
 		<false/>
 		<key>BGTaskSchedulerPermittedIdentifiers</key>
