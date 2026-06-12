@@ -49,3 +49,6 @@ app.*.map.json
 /android/app/release
 
 .github/prompts/
+
+# FVM Version Cache
+.fvm/
