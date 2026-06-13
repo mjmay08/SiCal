@@ -26,6 +26,34 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
   static const double _markerRowHeight = 12;
   static const double _markerRowGap = 1;
   static const int _markerMaxRows = 4;
+  static const List<String> _monthNames = <String>[
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  static const List<String> _monthAbbreviations = <String>[
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
   CalendarFormat _calendarFormat = CalendarFormat.month;
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
@@ -299,6 +327,126 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
     if (mounted) setState(() => _eventsByDay = map);
   }
 
+  int _daysInMonth(int year, int month) => DateTime(year, month + 1, 0).day;
+
+  int get _minYear => DateTime.now().year - 20;
+
+  int get _maxYear => DateTime.now().year + 20;
+
+  Widget _buildHeaderMonthYearTitle(DateTime focusedDay) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: _showMonthYearPicker,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('${_monthNames[focusedDay.month - 1]} ${focusedDay.year}'),
+            const SizedBox(width: 4),
+            const Icon(Icons.arrow_drop_down),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showMonthYearPicker() async {
+    var selectedYear = _focusedDay.year.clamp(_minYear, _maxYear);
+    var selectedMonth = _focusedDay.month;
+
+    final picked = await showDialog<DateTime>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Jump to month'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DropdownButtonFormField<int>(
+                    value: selectedYear,
+                    decoration: const InputDecoration(labelText: 'Year'),
+                    items: [
+                      for (var year = _minYear; year <= _maxYear; year++)
+                        DropdownMenuItem<int>(
+                          value: year,
+                          child: Text('$year'),
+                        ),
+                    ],
+                    onChanged: (year) {
+                      if (year == null) return;
+                      setDialogState(() => selectedYear = year);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: 12,
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          mainAxisSpacing: 8,
+                          crossAxisSpacing: 8,
+                          childAspectRatio: 2.2,
+                        ),
+                    itemBuilder: (context, index) {
+                      final month = index + 1;
+                      return ChoiceChip(
+                        showCheckmark: false,
+                        label: SizedBox(
+                          width: double.infinity,
+                          child: Text(
+                            _monthAbbreviations[index],
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                        selected: selectedMonth == month,
+                        onSelected: (_) {
+                          setDialogState(() => selectedMonth = month);
+                        },
+                      );
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(
+                    dialogContext,
+                  ).pop(DateTime(selectedYear, selectedMonth, 1)),
+                  child: const Text('Go'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (picked == null || !mounted) return;
+
+    final targetDay = _selectedDay?.day ?? 1;
+    final clampedDay = targetDay.clamp(
+      1,
+      _daysInMonth(picked.year, picked.month),
+    );
+    final nextSelected = DateTime(picked.year, picked.month, clampedDay);
+
+    setState(() {
+      _focusedDay = picked;
+      _selectedDay = nextSelected;
+    });
+    _loadVisibleEvents();
+  }
+
   @override
   Widget build(BuildContext context) {
     // Reload markers whenever the device timezone changes (e.g. app resume
@@ -371,8 +519,8 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
         children: [
           const SyncStatusBanner(),
           TableCalendar<CalendarEvent>(
-            firstDay: DateTime(2020),
-            lastDay: DateTime(2030),
+            firstDay: DateTime(_minYear, 1, 1),
+            lastDay: DateTime(_maxYear, 12, 31),
             focusedDay: _focusedDay,
             startingDayOfWeek: _weekStartsOn,
             rowHeight: 76,
@@ -392,6 +540,8 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
               _loadVisibleEvents();
             },
             calendarBuilders: CalendarBuilders(
+              headerTitleBuilder: (context, day) =>
+                  _buildHeaderMonthYearTitle(day),
               selectedBuilder: (context, day, focusedDay) =>
                   _buildDayCell(context, day, isSelected: true),
               todayBuilder: (context, day, focusedDay) =>
