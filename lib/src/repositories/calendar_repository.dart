@@ -103,6 +103,27 @@ DateTime effectiveOccurrenceStart(CalendarEvent event, String? deviceTz) {
   }
 }
 
+DateTime effectiveOccurrenceEnd(CalendarEvent event, String? deviceTz) {
+  final start = effectiveOccurrenceStart(event, deviceTz);
+  final duration = event.end.difference(event.start);
+  if (event.instanceStart != null) {
+    return start.add(duration);
+  }
+  if (event.allDay || event.timezone == null || deviceTz == null) {
+    return event.end;
+  }
+  if (deviceTz == event.timezone) return event.end;
+  try {
+    return TimezoneService.convertToTimezone(
+      event.end,
+      event.timezone!,
+      deviceTz,
+    );
+  } catch (_) {
+    return event.end;
+  }
+}
+
 final eventsForDayProvider =
     FutureProvider.family<List<CalendarEvent>, DateTime>((ref, day) async {
       final repo = await ref.watch(calendarRepositoryProvider.future);
@@ -131,6 +152,12 @@ final eventsForDayProvider =
       final results =
           candidates.where((e) {
             final start = effectiveOccurrenceStart(e, deviceTz);
+            final end = effectiveOccurrenceEnd(e, deviceTz);
+            if (e.allDay) {
+              final startDay = DateTime(start.year, start.month, start.day);
+              final endDay = DateTime(end.year, end.month, end.day);
+              return !dayStart.isBefore(startDay) && !dayStart.isAfter(endDay);
+            }
             return !start.isBefore(dayStart) && start.isBefore(dayEnd);
           }).toList()..sort(
             (a, b) => effectiveOccurrenceStart(
