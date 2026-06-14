@@ -1,8 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as dev;
 import 'dart:typed_data';
 
 import 'package:sia_storage/sia_storage.dart';
+
+void _log(String msg) {
+  final ts = DateTime.now().toIso8601String().substring(11, 23);
+  dev.log('[$ts] [SYNC_TRACE] $msg', name: 'SiaBridge');
+}
 
 class SiaBridge {
   SiaBridge._();
@@ -110,6 +116,9 @@ class SiaBridge {
     _shardCurrent = 0;
     _shardTotal = 0;
 
+    final uploadWatch = Stopwatch()..start();
+    _log('uploadPackedAndPin START items=${items.length}');
+
     final session = sdk.uploadPacked(
       options: const UploadOptions(
         dataShards: dataShards,
@@ -121,14 +130,21 @@ class SiaBridge {
     });
 
     try {
-      for (final item in items) {
+      for (var i = 0; i < items.length; i++) {
+        final item = items[i];
+        _log('uploadPackedAndPin add START index=$i bytes=${item.data.length}');
         await session.upload.add(Stream.value(item.data));
+        _log('uploadPackedAndPin add DONE index=$i');
       }
 
       final slabCount = session.upload.slabs().toInt();
       _shardTotal = slabCount * (dataShards + parityShards);
+      _log(
+        'uploadPackedAndPin finalize START slabs=$slabCount shards=$_shardTotal',
+      );
 
       final objects = await session.upload.finalize();
+      _log('uploadPackedAndPin finalize DONE objects=${objects.length}');
       final ids = <String>[];
 
       for (var i = 0; i < objects.length; i++) {
@@ -136,7 +152,9 @@ class SiaBridge {
         if (i < items.length) {
           obj.updateMetadata(metadata: utf8.encode(items[i].metadataJson));
         }
+        _log('uploadPackedAndPin pin START index=$i');
         await sdk.pinObject(object: obj);
+        _log('uploadPackedAndPin pin DONE index=$i objectId=${obj.id()}');
         ids.add(obj.id());
       }
 
@@ -144,7 +162,15 @@ class SiaBridge {
         _shardTotal = _shardCurrent;
       }
 
+      uploadWatch.stop();
+      _log('uploadPackedAndPin DONE in ${uploadWatch.elapsedMilliseconds}ms');
       return ids;
+    } catch (e) {
+      uploadWatch.stop();
+      _log(
+        'uploadPackedAndPin ERROR after ${uploadWatch.elapsedMilliseconds}ms: $e',
+      );
+      rethrow;
     } finally {
       await sub.cancel();
     }

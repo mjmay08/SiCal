@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:table_calendar/table_calendar.dart';
-import 'dart:async' show unawaited;
+import 'dart:async' show TimeoutException, unawaited;
 import '../../repositories/calendar_repository.dart';
 import '../../services/calendar_file_open_service.dart';
 import '../../services/incoming_calendar_intent_handler.dart';
@@ -842,9 +842,12 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
       syncError = true;
       progress.reset();
       if (!silent && mounted) {
+        final message = e is TimeoutException
+            ? 'Sync timed out while uploading. Please try again.'
+            : 'Sync failed: $e';
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Sync failed: $e')));
+        ).showSnackBar(SnackBar(content: Text(message)));
       }
     } finally {
       await SyncForegroundService.stop();
