@@ -19,11 +19,14 @@ typedef ProgressCallback =
 
 void _log(String msg) {
   final ts = DateTime.now().toIso8601String().substring(11, 23);
-  dev.log('[$ts] $msg', name: 'SyncEngine');
+  dev.log('[$ts] [SYNC_TRACE] $msg', name: 'SyncEngine');
 }
 
 /// Coordinates pushing local changes to Sia and pulling remote changes.
 class SyncEngine {
+  static const Duration _packedUploadTimeout = Duration(minutes: 10);
+  static const Duration _manifestUploadTimeout = Duration(minutes: 10);
+
   final AppDatabase _db;
   final SiaStorageService _sia;
 
@@ -31,6 +34,7 @@ class SyncEngine {
 
   /// Full sync: pull remote changes, then push local dirty changes.
   Future<void> fullSync({ProgressCallback? onProgress}) async {
+    final fullSyncWatch = Stopwatch()..start();
     _log('fullSync START');
 
     final calendars = _db.getCalendars();
@@ -40,6 +44,7 @@ class SyncEngine {
 
     for (var i = 0; i < targetIds.length; i++) {
       final calendarId = targetIds[i];
+      final calendarWatch = Stopwatch()..start();
       String? name;
       for (final c in calendars) {
         if (c.id == calendarId) {
@@ -54,12 +59,17 @@ class SyncEngine {
       );
       await pullChanges(calendarId: calendarId, onProgress: onProgress);
       await pushChanges(calendarId: calendarId, onProgress: onProgress);
+      calendarWatch.stop();
+      _log(
+        'fullSync calendar DONE [$calendarId] in ${calendarWatch.elapsedMilliseconds}ms',
+      );
     }
 
     unawaited(EventNotificationService.rescheduleAll(_db));
 
     onProgress?.call(phase: SyncPhase.done, message: 'Sync complete');
-    _log('fullSync DONE');
+    fullSyncWatch.stop();
+    _log('fullSync DONE in ${fullSyncWatch.elapsedMilliseconds}ms');
   }
 
   /// Pull changes from Sia using the cursor-based event stream.
@@ -220,10 +230,28 @@ class SyncEngine {
       });
     }
 
-    final ids = uploads.isNotEmpty
-        ? await _sia.uploadPacked(uploads)
-        : <String>[];
-    shardTimer?.cancel();
+    final packedUploadWatch = Stopwatch()..start();
+    List<String> ids;
+    try {
+      _log(
+        'pushChanges packed upload START [$calendarId] items=${uploads.length}',
+      );
+      ids = uploads.isNotEmpty
+          ? await _sia.uploadPacked(uploads).timeout(_packedUploadTimeout)
+          : <String>[];
+      packedUploadWatch.stop();
+      _log(
+        'pushChanges packed upload DONE [$calendarId] in ${packedUploadWatch.elapsedMilliseconds}ms',
+      );
+    } on TimeoutException {
+      packedUploadWatch.stop();
+      _log(
+        'pushChanges packed upload TIMEOUT [$calendarId] after ${packedUploadWatch.elapsedMilliseconds}ms',
+      );
+      rethrow;
+    } finally {
+      shardTimer?.cancel();
+    }
 
     // Send final shard progress.
     final finalSp = SiaBridge.getShardProgress();
@@ -262,10 +290,24 @@ class SyncEngine {
     _log(
       'pushChanges uploading manifest (data=${manifestData.length} bytes, ${chunks.length} chunk(s))',
     );
-    final manifestObjectId = await _sia.uploadManifest(
-      manifestData,
-      calendarId: calendarId,
-    );
+    final manifestUploadWatch = Stopwatch()..start();
+    late final String manifestObjectId;
+    try {
+      _log('pushChanges manifest upload START [$calendarId]');
+      manifestObjectId = await _sia
+          .uploadManifest(manifestData, calendarId: calendarId)
+          .timeout(_manifestUploadTimeout);
+      manifestUploadWatch.stop();
+      _log(
+        'pushChanges manifest upload DONE [$calendarId] in ${manifestUploadWatch.elapsedMilliseconds}ms',
+      );
+    } on TimeoutException {
+      manifestUploadWatch.stop();
+      _log(
+        'pushChanges manifest upload TIMEOUT [$calendarId] after ${manifestUploadWatch.elapsedMilliseconds}ms',
+      );
+      rethrow;
+    }
     _log(
       'pushChanges manifest uploaded → ${manifestObjectId.substring(0, 12)}…',
     );
