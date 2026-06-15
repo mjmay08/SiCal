@@ -19,7 +19,9 @@ typedef ProgressCallback =
 
 void _log(String msg) {
   final ts = DateTime.now().toIso8601String().substring(11, 23);
-  dev.log('[$ts] [SYNC_TRACE] $msg', name: 'SyncEngine');
+  final line = '[$ts] [SYNC_TRACE] $msg';
+  dev.log(line, name: 'SyncEngine');
+  print('[SyncEngine] $line');
 }
 
 /// Coordinates pushing local changes to Sia and pulling remote changes.
