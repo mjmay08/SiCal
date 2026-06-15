@@ -483,11 +483,19 @@ class IcsImportService {
     final freq = _parseFrequency(segments['FREQ']);
     if (freq == null) return null;
 
+    final byDayRaw = segments['BYDAY'];
+    final bySetPosRaw = segments['BYSETPOS'];
+
     return RecurrenceRule(
       freq: freq,
       interval: int.tryParse(segments['INTERVAL'] ?? '') ?? 1,
-      byDay: _parseByDay(segments['BYDAY']),
+      byDay: _parseByDay(byDayRaw),
       byMonthDay: int.tryParse(segments['BYMONTHDAY'] ?? ''),
+      byDayOrdinals: _parseByDayOrdinals(
+        byDayRaw: byDayRaw,
+        bySetPosRaw: bySetPosRaw,
+        freq: freq,
+      ),
       until: _parseIcsDateTime(segments['UNTIL'] ?? ''),
       count: int.tryParse(segments['COUNT'] ?? ''),
     ).encode();
@@ -531,6 +539,56 @@ class IcsImportService {
         .toList();
 
     return days.isEmpty ? null : days;
+  }
+
+  static List<String>? _parseByDayOrdinals({
+    required String? byDayRaw,
+    required String? bySetPosRaw,
+    required RecurrenceFrequency freq,
+  }) {
+    if (freq != RecurrenceFrequency.monthly) return null;
+    if (byDayRaw == null || byDayRaw.trim().isEmpty) return null;
+
+    final setPositions = bySetPosRaw == null || bySetPosRaw.trim().isEmpty
+        ? const <int>[]
+        : bySetPosRaw
+              .split(',')
+              .map((entry) => int.tryParse(entry.trim()))
+              .whereType<int>()
+              .where((value) => value != 0)
+              .toList();
+
+    final results = <String>[];
+    final seen = <String>{};
+    final entries = byDayRaw
+        .split(',')
+        .map((entry) => entry.trim().toUpperCase())
+        .where((entry) => entry.isNotEmpty);
+
+    for (final entry in entries) {
+      final match = RegExp(
+        r'^([+-]?\d+)?(MO|TU|WE|TH|FR|SA|SU)$',
+      ).firstMatch(entry);
+      if (match == null) continue;
+
+      final ordinalPart = match.group(1);
+      final weekdayPart = match.group(2)!;
+
+      if (ordinalPart != null && ordinalPart.isNotEmpty) {
+        final ordinal = int.tryParse(ordinalPart);
+        if (ordinal == null || ordinal == 0) continue;
+        final normalized = '$ordinal$weekdayPart';
+        if (seen.add(normalized)) results.add(normalized);
+        continue;
+      }
+
+      for (final setPos in setPositions) {
+        final normalized = '$setPos$weekdayPart';
+        if (seen.add(normalized)) results.add(normalized);
+      }
+    }
+
+    return results.isEmpty ? null : results;
   }
 
   /// Parses an RFC 5545 DURATION value (e.g. `PT1H30M`, `P1D`, `P1W`) into
