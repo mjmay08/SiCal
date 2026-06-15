@@ -7,8 +7,14 @@ import 'package:sia_storage/sia_storage.dart';
 
 void _log(String msg) {
   final ts = DateTime.now().toIso8601String().substring(11, 23);
-  dev.log('[$ts] [SYNC_TRACE] $msg', name: 'SiaBridge');
+  final line = '[$ts] [SYNC_TRACE] $msg';
+  dev.log(line, name: 'SiaBridge');
+  print('[SiaBridge] $line');
 }
+
+const _packedAddTimeout = Duration(minutes: 10);
+const _packedFinalizeTimeout = Duration(minutes: 10);
+const _packedPinTimeout = Duration(minutes: 10);
 
 class SiaBridge {
   SiaBridge._();
@@ -133,7 +139,14 @@ class SiaBridge {
       for (var i = 0; i < items.length; i++) {
         final item = items[i];
         _log('uploadPackedAndPin add START index=$i bytes=${item.data.length}');
-        await session.upload.add(Stream.value(item.data));
+        await session.upload
+            .add(Stream.value(item.data))
+            .timeout(
+              _packedAddTimeout,
+              onTimeout: () => throw TimeoutException(
+                'uploadPackedAndPin add TIMEOUT index=$i after ${_packedAddTimeout.inSeconds}s',
+              ),
+            );
         _log('uploadPackedAndPin add DONE index=$i');
       }
 
@@ -143,7 +156,12 @@ class SiaBridge {
         'uploadPackedAndPin finalize START slabs=$slabCount shards=$_shardTotal',
       );
 
-      final objects = await session.upload.finalize();
+      final objects = await session.upload.finalize().timeout(
+        _packedFinalizeTimeout,
+        onTimeout: () => throw TimeoutException(
+          'uploadPackedAndPin finalize TIMEOUT after ${_packedFinalizeTimeout.inSeconds}s',
+        ),
+      );
       _log('uploadPackedAndPin finalize DONE objects=${objects.length}');
       final ids = <String>[];
 
@@ -153,7 +171,14 @@ class SiaBridge {
           obj.updateMetadata(metadata: utf8.encode(items[i].metadataJson));
         }
         _log('uploadPackedAndPin pin START index=$i');
-        await sdk.pinObject(object: obj);
+        await sdk
+            .pinObject(object: obj)
+            .timeout(
+              _packedPinTimeout,
+              onTimeout: () => throw TimeoutException(
+                'uploadPackedAndPin pin TIMEOUT index=$i after ${_packedPinTimeout.inSeconds}s',
+              ),
+            );
         _log('uploadPackedAndPin pin DONE index=$i objectId=${obj.id()}');
         ids.add(obj.id());
       }
@@ -172,7 +197,16 @@ class SiaBridge {
       );
       rethrow;
     } finally {
-      await sub.cancel();
+      unawaited(
+        sub
+            .cancel()
+            .then((_) {
+              _log('uploadPackedAndPin progress subscription cancel DONE');
+            })
+            .catchError((e) {
+              _log('uploadPackedAndPin progress subscription cancel ERROR: $e');
+            }),
+      );
     }
   }
 
