@@ -107,6 +107,47 @@ END:VCALENDAR
       expect(allDay.start, DateTime(2026, 5, 13));
       expect(allDay.end, DateTime(2026, 5, 13, 23, 59));
     });
+
+    test('parses monthly first Thursday and expands by weekday ordinal', () {
+      final service = IcsImportService(FakeCalendarRepository());
+
+      final result = service.parseDraftsFromString('''
+BEGIN:VCALENDAR
+PRODID:-//SiCal//Test//EN
+VERSION:2.0
+BEGIN:VEVENT
+UID:monthly-ordinal-1
+SUMMARY:First Thursday Meetup
+DTSTART:20260507T090000
+DTEND:20260507T100000
+RRULE:FREQ=MONTHLY;BYDAY=1TH;COUNT=4
+END:VEVENT
+END:VCALENDAR
+''');
+
+      expect(result.skippedCount, 0);
+      expect(result.drafts, hasLength(1));
+
+      final master = result.drafts.single;
+      final rule = RecurrenceRule.decode(master.recurrenceRule!);
+      expect(rule.freq, RecurrenceFrequency.monthly);
+      expect(rule.byDay, [DateTime.thursday]);
+      expect(rule.byDayOrdinals, ['1TH']);
+
+      final expanded = RecurrenceEngine.expand(
+        master,
+        DateTime(2026, 5, 1),
+        DateTime(2026, 8, 31, 23, 59, 59),
+      );
+
+      expect(expanded, hasLength(4));
+      expect(expanded.map((e) => e.start), [
+        DateTime(2026, 5, 7, 9, 0),
+        DateTime(2026, 6, 4, 9, 0),
+        DateTime(2026, 7, 2, 9, 0),
+        DateTime(2026, 8, 6, 9, 0),
+      ]);
+    });
   });
 
   group('IcsImportService DURATION support', () {

@@ -17,6 +17,7 @@ class RecurrenceRule {
   final int interval; // every N freq units
   final List<int>? byDay; // 1=Mon..7=Sun (ISO weekday) — for weekly
   final int? byMonthDay; // 1–31 — for monthly
+  final List<String>? byDayOrdinals; // e.g. 1TH, -1MO — for monthly
   final DateTime? until; // end date (inclusive)
   final int? count; // max occurrences (null = infinite w/until or 2yr window)
 
@@ -25,6 +26,7 @@ class RecurrenceRule {
     this.interval = 1,
     this.byDay,
     this.byMonthDay,
+    this.byDayOrdinals,
     this.until,
     this.count,
   });
@@ -38,6 +40,7 @@ class RecurrenceRule {
     'interval': interval,
     if (byDay != null) 'byDay': byDay,
     if (byMonthDay != null) 'byMonthDay': byMonthDay,
+    if (byDayOrdinals != null) 'byDayOrdinals': byDayOrdinals,
     if (until != null) 'until': until!.toIso8601String(),
     if (count != null) 'count': count,
   };
@@ -50,6 +53,7 @@ class RecurrenceRule {
       interval: json['interval'] as int? ?? 1,
       byDay: (json['byDay'] as List<dynamic>?)?.cast<int>(),
       byMonthDay: json['byMonthDay'] as int?,
+      byDayOrdinals: (json['byDayOrdinals'] as List<dynamic>?)?.cast<String>(),
       until: json['until'] != null
           ? DateTime.parse(json['until'] as String)
           : null,
@@ -115,6 +119,7 @@ class RecurrenceRule {
     int? interval,
     Object? byDay = _sentinel,
     Object? byMonthDay = _sentinel,
+    Object? byDayOrdinals = _sentinel,
     Object? until = _sentinel,
     Object? count = _sentinel,
   }) => RecurrenceRule(
@@ -122,6 +127,9 @@ class RecurrenceRule {
     interval: interval ?? this.interval,
     byDay: byDay == _sentinel ? this.byDay : byDay as List<int>?,
     byMonthDay: byMonthDay == _sentinel ? this.byMonthDay : byMonthDay as int?,
+    byDayOrdinals: byDayOrdinals == _sentinel
+        ? this.byDayOrdinals
+        : byDayOrdinals as List<String>?,
     until: until == _sentinel ? this.until : until as DateTime?,
     count: count == _sentinel ? this.count : count as int?,
   );
@@ -229,7 +237,13 @@ class RecurrenceEngine {
       case RecurrenceFrequency.weekly:
         yield* _weeklyDates(start, end, rule.interval, rule.byDay);
       case RecurrenceFrequency.monthly:
-        yield* _monthlyDates(start, end, rule.interval, rule.byMonthDay);
+        yield* _monthlyDates(
+          start,
+          end,
+          rule.interval,
+          rule.byMonthDay,
+          rule.byDayOrdinals,
+        );
       case RecurrenceFrequency.yearly:
         yield* _yearlyDates(start, end, rule.interval);
     }
@@ -291,25 +305,52 @@ class RecurrenceEngine {
     DateTime end,
     int interval,
     int? byMonthDay,
+    List<String>? byDayOrdinals,
   ) sync* {
-    final day = byMonthDay ?? start.day;
     var year = start.year;
     var month = start.month;
 
     while (true) {
-      final daysInMonth = DateTime(year, month + 1, 0).day;
-      final clampedDay = day > daysInMonth ? daysInMonth : day;
-      final d = DateTime(
-        year,
-        month,
-        clampedDay,
-        start.hour,
-        start.minute,
-        start.second,
-      );
+      final monthDates = <DateTime>[];
 
-      if (d.isAfter(end)) break;
-      if (!d.isBefore(start)) yield d;
+      if (byDayOrdinals != null && byDayOrdinals.isNotEmpty) {
+        monthDates.addAll(
+          _datesForMonthlyByDayOrdinals(start, year, month, byDayOrdinals),
+        );
+      } else {
+        final day = byMonthDay ?? start.day;
+        final daysInMonth = DateTime(year, month + 1, 0).day;
+        final clampedDay = day > daysInMonth ? daysInMonth : day;
+        monthDates.add(
+          DateTime(
+            year,
+            month,
+            clampedDay,
+            start.hour,
+            start.minute,
+            start.second,
+          ),
+        );
+      }
+
+      if (monthDates.isEmpty) {
+        month += interval;
+        while (month > 12) {
+          month -= 12;
+          year++;
+        }
+        continue;
+      }
+
+      monthDates.sort();
+      DateTime? lastYielded;
+      for (final d in monthDates) {
+        if (d.isAfter(end)) return;
+        if (d.isBefore(start)) continue;
+        if (lastYielded != null && d.isAtSameMomentAs(lastYielded)) continue;
+        yield d;
+        lastYielded = d;
+      }
 
       month += interval;
       while (month > 12) {
@@ -317,6 +358,64 @@ class RecurrenceEngine {
         year++;
       }
     }
+  }
+
+  static List<DateTime> _datesForMonthlyByDayOrdinals(
+    DateTime template,
+    int year,
+    int month,
+    List<String> byDayOrdinals,
+  ) {
+    const weekdayMap = <String, int>{
+      'MO': DateTime.monday,
+      'TU': DateTime.tuesday,
+      'WE': DateTime.wednesday,
+      'TH': DateTime.thursday,
+      'FR': DateTime.friday,
+      'SA': DateTime.saturday,
+      'SU': DateTime.sunday,
+    };
+
+    final dates = <DateTime>[];
+    final daysInMonth = DateTime(year, month + 1, 0).day;
+
+    for (final token in byDayOrdinals) {
+      final m = RegExp(
+        r'^([+-]?\d+)(MO|TU|WE|TH|FR|SA|SU)$',
+      ).firstMatch(token.toUpperCase());
+      if (m == null) continue;
+
+      final ordinal = int.tryParse(m.group(1)!);
+      final weekday = weekdayMap[m.group(2)!];
+      if (ordinal == null || weekday == null || ordinal == 0) continue;
+
+      int? day;
+      if (ordinal > 0) {
+        final firstOfMonth = DateTime(year, month, 1);
+        final offset = (weekday - firstOfMonth.weekday + 7) % 7;
+        final candidate = 1 + offset + ((ordinal - 1) * 7);
+        if (candidate <= daysInMonth) day = candidate;
+      } else {
+        final lastOfMonth = DateTime(year, month, daysInMonth);
+        final offsetFromEnd = (lastOfMonth.weekday - weekday + 7) % 7;
+        final candidate = daysInMonth - offsetFromEnd + ((ordinal + 1) * 7);
+        if (candidate >= 1) day = candidate;
+      }
+
+      if (day == null) continue;
+      dates.add(
+        DateTime(
+          year,
+          month,
+          day,
+          template.hour,
+          template.minute,
+          template.second,
+        ),
+      );
+    }
+
+    return dates;
   }
 
   static Iterable<DateTime> _yearlyDates(
