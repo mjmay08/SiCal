@@ -5,6 +5,7 @@ import '../../models/event.dart';
 import '../../models/recurrence.dart';
 import '../../repositories/calendar_repository.dart';
 import '../../services/timezone_service.dart';
+import '../../utils/event_time_range_adjustment.dart';
 import '../widgets/reminder_minutes_picker.dart';
 
 class EventFormScreen extends ConsumerStatefulWidget {
@@ -99,6 +100,46 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
     );
   }
 
+  DateTime _selectedStartDateTime({DateTime? date, TimeOfDay? time}) {
+    final selectedDate = date ?? _startDate;
+    final selectedTime = time ?? _startTime;
+    return DateTime(
+      selectedDate.year,
+      selectedDate.month,
+      selectedDate.day,
+      _allDay ? 0 : selectedTime.hour,
+      _allDay ? 0 : selectedTime.minute,
+    );
+  }
+
+  DateTime _selectedEndDateTime() {
+    return DateTime(
+      _endDate.year,
+      _endDate.month,
+      _endDate.day,
+      _allDay ? 23 : _endTime.hour,
+      _allDay ? 59 : _endTime.minute,
+    );
+  }
+
+  void _updateStartDateTime({DateTime? date, TimeOfDay? time}) {
+    final previousStart = _selectedStartDateTime();
+    final previousEnd = _selectedEndDateTime();
+    final nextStart = _selectedStartDateTime(date: date, time: time);
+    final adjustedRange = shiftDateTimeRangeStart(
+      previousStart: previousStart,
+      previousEnd: previousEnd,
+      nextStart: nextStart,
+    );
+
+    setState(() {
+      _startDate = adjustedRange.start;
+      _startTime = TimeOfDay.fromDateTime(adjustedRange.start);
+      _endDate = adjustedRange.end;
+      _endTime = TimeOfDay.fromDateTime(adjustedRange.end);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -133,8 +174,8 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
               date: _startDate,
               time: _startTime,
               showTime: !_allDay,
-              onDateChanged: (d) => setState(() => _startDate = d),
-              onTimeChanged: (t) => setState(() => _startTime = t),
+              onDateChanged: (d) => _updateStartDateTime(date: d),
+              onTimeChanged: (t) => _updateStartDateTime(time: t),
             ),
             const SizedBox(height: 8),
             _DateTimePicker(
