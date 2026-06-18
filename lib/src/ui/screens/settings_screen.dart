@@ -154,8 +154,14 @@ class SettingsScreen extends ConsumerWidget {
             onPressed: () async {
               Navigator.pop(ctx);
               final auth = ref.read(authServiceProvider);
+              final db = await ref.read(appDatabaseProvider.future);
+              db.clearAllTables();
               await auth.clearAll();
               await EventNotificationService.clearAll();
+              ref.invalidate(eventsForDayProvider);
+              ref.invalidate(calendarsProvider);
+              ref.invalidate(visibleCalendarIdsProvider);
+              ref.invalidate(calendarLookupProvider);
               ref.invalidate(authStateProvider);
               if (context.mounted) {
                 Navigator.of(context).popUntil((route) => route.isFirst);

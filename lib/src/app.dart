@@ -39,6 +39,8 @@ class _StartupGate extends ConsumerStatefulWidget {
 
 class _StartupGateState extends ConsumerState<_StartupGate> {
   bool _bootstrappedNotifications = false;
+  bool _handledMissingAppKey = false;
+  bool _handlingMissingAppKey = false;
   String? _pendingOpenEventId;
   StreamSubscription<String>? _tapSubscription;
 
@@ -85,6 +87,24 @@ class _StartupGateState extends ConsumerState<_StartupGate> {
     );
   }
 
+  Future<void> _maybeClearLocalCacheForMissingAppKey() async {
+    if (_handledMissingAppKey || _handlingMissingAppKey) return;
+    _handlingMissingAppKey = true;
+    try {
+      final auth = ref.read(authServiceProvider);
+      final hasStoredAppKey = await auth.hasStoredAppKey();
+      if (!hasStoredAppKey) {
+        final db = await ref.read(appDatabaseProvider.future);
+        db.clearAllTables();
+        await EventNotificationService.clearAll();
+        ref.invalidate(eventsForDayProvider);
+      }
+      _handledMissingAppKey = true;
+    } finally {
+      _handlingMissingAppKey = false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authStateProvider);
@@ -94,6 +114,12 @@ class _StartupGateState extends ConsumerState<_StartupGate> {
             EventNotificationService.consumePendingTapPayload();
         if (launchPayload != null) {
           _pendingOpenEventId = launchPayload;
+        }
+
+        if (!isConnected && !_handledMissingAppKey && !_handlingMissingAppKey) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _maybeClearLocalCacheForMissingAppKey();
+          });
         }
 
         if (isConnected && !_bootstrappedNotifications) {
