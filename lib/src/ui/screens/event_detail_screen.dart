@@ -5,7 +5,7 @@ import '../../models/event.dart';
 import '../../models/recurrence.dart';
 import '../../repositories/calendar_repository.dart';
 import '../../services/timezone_service.dart';
-import '../widgets/reminder_minutes_picker.dart';
+import '../../utils/reminder_time_format.dart';
 import 'event_form_screen.dart';
 
 class EventDetailScreen extends ConsumerStatefulWidget {

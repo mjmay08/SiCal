@@ -1,10 +1,5 @@
 import 'package:flutter/material.dart';
-
-String formatReminderMinutes(List<int> reminderMinutes) {
-  if (reminderMinutes.isEmpty) return 'No alert';
-  final sorted = reminderMinutes.toSet().toList()..sort();
-  return sorted.map(_formatSingleReminder).join(', ');
-}
+import '../../utils/reminder_time_format.dart';
 
 class ReminderMinutesPickerTile extends StatelessWidget {
   final List<int> reminderMinutes;
@@ -102,7 +97,11 @@ class _ReminderMinutesPickerSheetState
               children: [
                 for (final minutes in _presets)
                   FilterChip(
-                    label: Text(_formatPresetLabel(minutes)),
+                    label: Text(
+                      minutes == 0
+                          ? 'At start'
+                          : formatReminderLeadTime(minutes),
+                    ),
                     selected: _selected.contains(minutes),
                     onSelected: (selected) {
                       setState(() {
@@ -237,7 +236,12 @@ class _ReminderMinutesPickerSheetState
                 children: [
                   for (final minutes in _selected.toList()..sort())
                     InputChip(
-                      label: Text(_formatSingleReminder(minutes)),
+                      label: Text(
+                        formatReminderOffsetBefore(
+                          minutes,
+                          abbreviateMinutes: true,
+                        ),
+                      ),
                       onDeleted: () =>
                           setState(() => _selected.remove(minutes)),
                     ),
@@ -289,44 +293,7 @@ enum _ReminderUnit {
   const _ReminderUnit(this.label, this.factorMinutes);
 }
 
-String _formatPresetLabel(int minutes) {
-  if (minutes == 0) return 'At start';
-  if (minutes % 10080 == 0) {
-    final weeks = minutes ~/ 10080;
-    return weeks == 1 ? '1 week' : '$weeks weeks';
-  }
-  if (minutes % 1440 == 0) {
-    final days = minutes ~/ 1440;
-    return days == 1 ? '1 day' : '$days days';
-  }
-  if (minutes % 60 == 0) {
-    final hours = minutes ~/ 60;
-    return hours == 1 ? '1 hour' : '$hours hours';
-  }
-  return minutes == 1 ? '1 min' : '$minutes min';
-}
-
 String _formatValueWithUnit(int value, _ReminderUnit unit) {
   final singular = unit.label.substring(0, unit.label.length - 1);
   return '$value ${value == 1 ? singular : unit.label}';
-}
-
-String _formatSingleReminder(int minutes) {
-  if (minutes == 0) return 'At start';
-  if (minutes == 1) return '1 min before';
-  if (minutes < 60) return '$minutes min before';
-  if (minutes % 10080 == 0) {
-    final weeks = minutes ~/ 10080;
-    return weeks == 1 ? '1 week before' : '$weeks weeks before';
-  }
-  if (minutes % 1440 == 0) {
-    final days = minutes ~/ 1440;
-    return days == 1 ? '1 day before' : '$days days before';
-  }
-  if (minutes % 60 == 0) {
-    final hours = minutes ~/ 60;
-    return hours == 1 ? '1 hour before' : '$hours hours before';
-  }
-  final hours = minutes / 60;
-  return '${hours.toStringAsFixed(1)} hours before';
 }

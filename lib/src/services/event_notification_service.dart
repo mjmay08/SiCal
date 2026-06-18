@@ -6,6 +6,7 @@ import 'package:timezone/timezone.dart' as tz;
 import '../database/database.dart';
 import '../models/event.dart';
 import '../repositories/calendar_repository.dart';
+import '../utils/reminder_time_format.dart';
 import 'timezone_service.dart';
 
 class EventNotificationService {
@@ -233,7 +234,7 @@ class EventNotificationService {
       return 'Starts now at ${event.location}';
     }
 
-    final when = reminderMinutes == 1 ? '1 minute' : '$reminderMinutes minutes';
+    final when = formatReminderLeadTime(reminderMinutes);
     if (event.location.isEmpty) return 'Starts in $when';
     return 'Starts in $when at ${event.location}';
   }
