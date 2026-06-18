@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/calendar.dart';
@@ -32,6 +33,7 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
   String? _timezone;
   String _calendarId = kDefaultCalendarId;
   List<int>? _reminderMinutes;
+  _DateTimeEditorTarget? _activeEditor;
 
   bool get _isEditing => widget.existingEvent != null;
 
@@ -140,6 +142,21 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
     });
   }
 
+  void _toggleEditor(_DateTimeEditorTarget editor) {
+    setState(() {
+      _activeEditor = _activeEditor == editor ? null : editor;
+    });
+  }
+
+  void _handleAllDayChanged(bool value) {
+    setState(() {
+      _allDay = value;
+      if (value && _activeEditor?.isTime == true) {
+        _activeEditor = null;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -166,7 +183,7 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
             SwitchListTile(
               title: const Text('All day'),
               value: _allDay,
-              onChanged: (v) => setState(() => _allDay = v),
+              onChanged: _handleAllDayChanged,
             ),
             const SizedBox(height: 8),
             _DateTimePicker(
@@ -174,8 +191,14 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
               date: _startDate,
               time: _startTime,
               showTime: !_allDay,
+              isDateEditorVisible:
+                  _activeEditor == _DateTimeEditorTarget.startDate,
+              isTimeEditorVisible:
+                  _activeEditor == _DateTimeEditorTarget.startTime,
               onDateChanged: (d) => _updateStartDateTime(date: d),
               onTimeChanged: (t) => _updateStartDateTime(time: t),
+              onDateTap: () => _toggleEditor(_DateTimeEditorTarget.startDate),
+              onTimeTap: () => _toggleEditor(_DateTimeEditorTarget.startTime),
             ),
             const SizedBox(height: 8),
             _DateTimePicker(
@@ -183,8 +206,14 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
               date: _endDate,
               time: _endTime,
               showTime: !_allDay,
+              isDateEditorVisible:
+                  _activeEditor == _DateTimeEditorTarget.endDate,
+              isTimeEditorVisible:
+                  _activeEditor == _DateTimeEditorTarget.endTime,
               onDateChanged: (d) => setState(() => _endDate = d),
               onTimeChanged: (t) => setState(() => _endTime = t),
+              onDateTap: () => _toggleEditor(_DateTimeEditorTarget.endDate),
+              onTimeTap: () => _toggleEditor(_DateTimeEditorTarget.endTime),
             ),
             if (!_allDay) ...[
               const SizedBox(height: 8),
@@ -294,6 +323,14 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
 
     Navigator.of(context).pop(event);
   }
+}
+
+enum _DateTimeEditorTarget { startDate, startTime, endDate, endTime }
+
+extension on _DateTimeEditorTarget {
+  bool get isTime =>
+      this == _DateTimeEditorTarget.startTime ||
+      this == _DateTimeEditorTarget.endTime;
 }
 
 class _CalendarPickerTile extends ConsumerWidget {
@@ -517,55 +554,280 @@ class _DateTimePicker extends StatelessWidget {
   final DateTime date;
   final TimeOfDay time;
   final bool showTime;
+  final bool isDateEditorVisible;
+  final bool isTimeEditorVisible;
   final ValueChanged<DateTime> onDateChanged;
   final ValueChanged<TimeOfDay> onTimeChanged;
+  final VoidCallback onDateTap;
+  final VoidCallback onTimeTap;
 
   const _DateTimePicker({
     required this.label,
     required this.date,
     required this.time,
     required this.showTime,
+    required this.isDateEditorVisible,
+    required this.isTimeEditorVisible,
     required this.onDateChanged,
     required this.onTimeChanged,
+    required this.onDateTap,
+    required this.onTimeTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final editorDecoration = BoxDecoration(
+      border: Border.all(color: Theme.of(context).dividerColor),
+      borderRadius: BorderRadius.circular(12),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          flex: 3,
-          child: OutlinedButton.icon(
-            icon: const Icon(Icons.calendar_today, size: 18),
-            label: Text('$label: ${date.month}/${date.day}/${date.year}'),
-            onPressed: () async {
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: date,
-                firstDate: DateTime(2020),
-                lastDate: DateTime(2030),
-              );
-              if (picked != null) onDateChanged(picked);
-            },
-          ),
+        Row(
+          children: [
+            Expanded(
+              flex: 3,
+              child: OutlinedButton.icon(
+                key: Key('${label.toLowerCase()}-date-button'),
+                icon: const Icon(Icons.calendar_today, size: 18),
+                label: Text('$label: ${date.month}/${date.day}/${date.year}'),
+                onPressed: onDateTap,
+              ),
+            ),
+            if (showTime) ...[
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: OutlinedButton.icon(
+                  key: Key('${label.toLowerCase()}-time-button'),
+                  icon: const Icon(Icons.access_time, size: 18),
+                  label: Text(time.format(context)),
+                  onPressed: onTimeTap,
+                ),
+              ),
+            ],
+          ],
         ),
-        if (showTime) ...[
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 2,
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.access_time, size: 18),
-              label: Text(time.format(context)),
-              onPressed: () async {
-                final picked = await showTimePicker(
-                  context: context,
-                  initialTime: time,
-                );
-                if (picked != null) onTimeChanged(picked);
-              },
+        if (isDateEditorVisible) ...[
+          const SizedBox(height: 12),
+          Container(
+            key: Key('${label.toLowerCase()}-date-editor'),
+            decoration: editorDecoration,
+            padding: const EdgeInsets.all(12),
+            child: CalendarDatePicker(
+              initialDate: date,
+              firstDate: DateTime(2020),
+              lastDate: DateTime(2030),
+              onDateChanged: onDateChanged,
             ),
           ),
         ],
+        if (showTime && isTimeEditorVisible) ...[
+          const SizedBox(height: 12),
+          Container(
+            key: Key('${label.toLowerCase()}-time-editor'),
+            decoration: editorDecoration,
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: _InlineTimePicker(
+              label: label,
+              time: time,
+              onChanged: onTimeChanged,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _InlineTimePicker extends StatefulWidget {
+  final String label;
+  final TimeOfDay time;
+  final ValueChanged<TimeOfDay> onChanged;
+
+  const _InlineTimePicker({
+    required this.label,
+    required this.time,
+    required this.onChanged,
+  });
+
+  @override
+  State<_InlineTimePicker> createState() => _InlineTimePickerState();
+}
+
+class _InlineTimePickerState extends State<_InlineTimePicker> {
+  static const _itemExtent = 40.0;
+
+  late FixedExtentScrollController _hourController;
+  late FixedExtentScrollController _minuteController;
+  late FixedExtentScrollController _periodController;
+  late int _selectedHourIndex;
+  late int _selectedMinute;
+  late bool _selectedIsAm;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncSelectionFromTime(widget.time);
+    _hourController = FixedExtentScrollController(
+      initialItem: _selectedHourIndex,
+    );
+    _minuteController = FixedExtentScrollController(
+      initialItem: _selectedMinute,
+    );
+    _periodController = FixedExtentScrollController(
+      initialItem: _selectedIsAm ? 0 : 1,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _InlineTimePicker oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_currentSelectedTime != widget.time) {
+      _syncSelectionFromTime(widget.time);
+      _hourController.jumpToItem(_selectedHourIndex);
+      _minuteController.jumpToItem(_selectedMinute);
+      _periodController.jumpToItem(_selectedIsAm ? 0 : 1);
+    }
+  }
+
+  @override
+  void dispose() {
+    _hourController.dispose();
+    _minuteController.dispose();
+    _periodController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('${widget.label} time', style: textTheme.titleSmall),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 176,
+          child: Row(
+            children: [
+              Expanded(
+                child: _WheelColumn(
+                  label: 'Hour',
+                  pickerKey: Key('${widget.label.toLowerCase()}-hour-wheel'),
+                  controller: _hourController,
+                  itemExtent: _itemExtent,
+                  itemCount: 12,
+                  itemLabelBuilder: (index) => '${index + 1}',
+                  onSelectedItemChanged: (index) =>
+                      _updateTime(hourIndex: index),
+                ),
+              ),
+              Expanded(
+                child: _WheelColumn(
+                  label: 'Minute',
+                  pickerKey: Key('${widget.label.toLowerCase()}-minute-wheel'),
+                  controller: _minuteController,
+                  itemExtent: _itemExtent,
+                  itemCount: 60,
+                  itemLabelBuilder: (index) => index.toString().padLeft(2, '0'),
+                  onSelectedItemChanged: (index) => _updateTime(minute: index),
+                ),
+              ),
+              Expanded(
+                child: _WheelColumn(
+                  label: 'AM/PM',
+                  pickerKey: Key('${widget.label.toLowerCase()}-period-wheel'),
+                  controller: _periodController,
+                  itemExtent: _itemExtent,
+                  itemCount: 2,
+                  itemLabelBuilder: (index) => index == 0 ? 'AM' : 'PM',
+                  onSelectedItemChanged: (index) =>
+                      _updateTime(isAm: index == 0),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _updateTime({int? hourIndex, int? minute, bool? isAm}) {
+    _selectedHourIndex = hourIndex ?? _selectedHourIndex;
+    _selectedMinute = minute ?? _selectedMinute;
+    _selectedIsAm = isAm ?? _selectedIsAm;
+    widget.onChanged(_currentSelectedTime);
+  }
+
+  int _hourIndex(TimeOfDay time) {
+    final hourOfPeriod = time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
+    return hourOfPeriod - 1;
+  }
+
+  TimeOfDay get _currentSelectedTime {
+    final hourOfPeriod = _selectedHourIndex + 1;
+    final normalizedHour = hourOfPeriod % 12;
+    final nextHour = _selectedIsAm ? normalizedHour : normalizedHour + 12;
+    return TimeOfDay(hour: nextHour, minute: _selectedMinute);
+  }
+
+  void _syncSelectionFromTime(TimeOfDay time) {
+    _selectedHourIndex = _hourIndex(time);
+    _selectedMinute = time.minute;
+    _selectedIsAm = time.period == DayPeriod.am;
+  }
+}
+
+class _WheelColumn extends StatelessWidget {
+  final String label;
+  final Key pickerKey;
+  final FixedExtentScrollController controller;
+  final double itemExtent;
+  final int itemCount;
+  final String Function(int index) itemLabelBuilder;
+  final ValueChanged<int> onSelectedItemChanged;
+
+  const _WheelColumn({
+    required this.label,
+    required this.pickerKey,
+    required this.controller,
+    required this.itemExtent,
+    required this.itemCount,
+    required this.itemLabelBuilder,
+    required this.onSelectedItemChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
+    return Column(
+      children: [
+        Text(label, style: textTheme.labelLarge),
+        const SizedBox(height: 8),
+        Expanded(
+          child: CupertinoPicker.builder(
+            key: pickerKey,
+            scrollController: controller,
+            itemExtent: itemExtent,
+            useMagnifier: true,
+            magnification: 1.05,
+            onSelectedItemChanged: onSelectedItemChanged,
+            childCount: itemCount,
+            itemBuilder: (context, index) {
+              return Center(
+                child: Text(
+                  itemLabelBuilder(index),
+                  style: textTheme.titleMedium,
+                ),
+              );
+            },
+          ),
+        ),
       ],
     );
   }
