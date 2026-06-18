@@ -17,6 +17,7 @@ class OnboardingScreen extends ConsumerStatefulWidget {
 
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _pageController = PageController();
+  int _pageIndex = 0;
   String? _recoveryPhrase;
   bool _phraseConfirmed = false;
   bool _isConnecting = false;
@@ -36,44 +37,97 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      body: SafeArea(
-        child: PageView(
-          controller: _pageController,
-          physics: const NeverScrollableScrollPhysics(),
-          onPageChanged: (_) {},
-          children: [
-            _buildWelcomePage(),
-            _buildChoicePage(),
-            _buildNewPhrasePage(),
-            _buildRestorePage(),
-            _buildConnectingPage(),
-          ],
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              scheme.surface,
+              scheme.surfaceContainerLowest,
+              scheme.primary.withAlpha(20),
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    for (var i = 0; i < 5; i++)
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 220),
+                        margin: const EdgeInsets.symmetric(horizontal: 4),
+                        height: 6,
+                        width: _pageIndex == i ? 22 : 10,
+                        decoration: BoxDecoration(
+                          color: _pageIndex == i
+                              ? scheme.primary
+                              : scheme.outlineVariant,
+                          borderRadius: BorderRadius.circular(100),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: PageView(
+                  controller: _pageController,
+                  physics: const NeverScrollableScrollPhysics(),
+                  onPageChanged: (index) => setState(() => _pageIndex = index),
+                  children: [
+                    _buildWelcomePage(),
+                    _buildChoicePage(),
+                    _buildNewPhrasePage(),
+                    _buildRestorePage(),
+                    _buildConnectingPage(),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _buildWelcomePage() {
-    return Padding(
-      padding: const EdgeInsets.all(32),
+    return _PageCard(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.calendar_month,
-            size: 96,
-            color: Theme.of(context).colorScheme.primary,
+          Container(
+            width: 112,
+            height: 112,
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primary.withAlpha(26),
+              borderRadius: BorderRadius.circular(30),
+            ),
+            child: Icon(
+              Icons.calendar_month,
+              size: 64,
+              color: Theme.of(context).colorScheme.primary,
+            ),
           ),
           const SizedBox(height: 24),
-          Text('SiCal', style: Theme.of(context).textTheme.headlineLarge),
-          const SizedBox(height: 16),
+          Text(
+            'SiCal',
+            style: Theme.of(
+              context,
+            ).textTheme.displaySmall?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 14),
           Text(
             'Your calendar, encrypted and stored on the decentralized Sia network. No accounts. No servers. Just your data.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyLarge,
           ),
-          const SizedBox(height: 48),
+          const SizedBox(height: 36),
           FilledButton(
             onPressed: () => _goToPage(1),
             child: const Text('Get Started'),
@@ -84,22 +138,22 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Widget _buildChoicePage() {
-    return Padding(
-      padding: const EdgeInsets.all(32),
+    return _PageCard(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Text(
             'Set Up Your Calendar',
             style: Theme.of(context).textTheme.headlineMedium,
+            textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: 30),
           FilledButton.icon(
             onPressed: _generatePhrase,
             icon: const Icon(Icons.add),
             label: const Text('Create New Calendar'),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           OutlinedButton.icon(
             onPressed: () => _goToPage(3),
             icon: const Icon(Icons.restore),
@@ -111,8 +165,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Widget _buildNewPhrasePage() {
-    return Padding(
-      padding: const EdgeInsets.all(32),
+    return _PageCard(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -175,8 +228,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Widget _buildRestorePage() {
-    return Padding(
-      padding: const EdgeInsets.all(32),
+    return _PageCard(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -218,8 +270,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Widget _buildConnectingPage() {
-    return Padding(
-      padding: const EdgeInsets.all(32),
+    return _PageCard(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -489,6 +540,28 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const CalendarScreen()),
       (_) => false,
+    );
+  }
+}
+
+class _PageCard extends StatelessWidget {
+  final Widget child;
+
+  const _PageCard({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          child: Card(
+            child: Padding(padding: const EdgeInsets.all(24), child: child),
+          ),
+        ),
+      ),
     );
   }
 }

@@ -162,103 +162,130 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_isEditing ? 'Edit Event' : 'New Event'),
-        actions: [TextButton(onPressed: _save, child: const Text('Save'))],
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FilledButton.tonal(
+              onPressed: _save,
+              child: const Text('Save'),
+            ),
+          ),
+        ],
       ),
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 16),
           children: [
-            TextFormField(
-              controller: _titleController,
-              decoration: const InputDecoration(
-                labelText: 'Title',
-                border: OutlineInputBorder(),
-              ),
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Title is required' : null,
-              autofocus: !_isEditing,
-            ),
-            const SizedBox(height: 16),
-            SwitchListTile(
-              title: const Text('All day'),
-              value: _allDay,
-              onChanged: _handleAllDayChanged,
-            ),
-            const SizedBox(height: 8),
-            _DateTimePicker(
-              label: 'Start',
-              date: _startDate,
-              time: _startTime,
-              showTime: !_allDay,
-              isDateEditorVisible:
-                  _activeEditor == _DateTimeEditorTarget.startDate,
-              isTimeEditorVisible:
-                  _activeEditor == _DateTimeEditorTarget.startTime,
-              onDateChanged: (d) => _updateStartDateTime(date: d),
-              onTimeChanged: (t) => _updateStartDateTime(time: t),
-              onDateTap: () => _toggleEditor(_DateTimeEditorTarget.startDate),
-              onTimeTap: () => _toggleEditor(_DateTimeEditorTarget.startTime),
-            ),
-            const SizedBox(height: 8),
-            _DateTimePicker(
-              label: 'End',
-              date: _endDate,
-              time: _endTime,
-              showTime: !_allDay,
-              isDateEditorVisible:
-                  _activeEditor == _DateTimeEditorTarget.endDate,
-              isTimeEditorVisible:
-                  _activeEditor == _DateTimeEditorTarget.endTime,
-              onDateChanged: (d) => setState(() => _endDate = d),
-              onTimeChanged: (t) => setState(() => _endTime = t),
-              onDateTap: () => _toggleEditor(_DateTimeEditorTarget.endDate),
-              onTimeTap: () => _toggleEditor(_DateTimeEditorTarget.endTime),
-            ),
-            if (!_allDay) ...[
-              const SizedBox(height: 8),
-              _TimezoneTile(
-                timezone: _timezone,
-                onChanged: (tz) => setState(() => _timezone = tz),
-              ),
-            ],
-            const SizedBox(height: 8),
-            _CalendarPickerTile(
-              selectedCalendarId: _calendarId,
-              onChanged: (id) => setState(() => _calendarId = id),
-            ),
-            const SizedBox(height: 16),
-            if (!_isException) ...[
-              _RecurrencePicker(
-                rule: _recurrenceRule,
-                onChanged: (r) => setState(() => _recurrenceRule = r),
-              ),
-              const SizedBox(height: 16),
-            ],
-            ReminderMinutesPickerTile(
-              reminderMinutes: _reminderMinutes ?? const [],
-              title: 'Alerts',
-              subtitle: 'Remind me',
-              onChanged: (minutes) =>
-                  setState(() => _reminderMinutes = minutes),
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _locationController,
-              decoration: const InputDecoration(
-                labelText: 'Location',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.location_on),
+            _FormSection(
+              title: 'Event details',
+              child: Column(
+                children: [
+                  TextFormField(
+                    controller: _titleController,
+                    decoration: const InputDecoration(labelText: 'Title'),
+                    validator: (v) => (v == null || v.trim().isEmpty)
+                        ? 'Title is required'
+                        : null,
+                    autofocus: !_isEditing,
+                  ),
+                  const SizedBox(height: 10),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('All day'),
+                    value: _allDay,
+                    onChanged: _handleAllDayChanged,
+                  ),
+                  const SizedBox(height: 8),
+                  _DateTimePicker(
+                    label: 'Start',
+                    date: _startDate,
+                    time: _startTime,
+                    showTime: !_allDay,
+                    isDateEditorVisible:
+                        _activeEditor == _DateTimeEditorTarget.startDate,
+                    isTimeEditorVisible:
+                        _activeEditor == _DateTimeEditorTarget.startTime,
+                    onDateChanged: (d) => _updateStartDateTime(date: d),
+                    onTimeChanged: (t) => _updateStartDateTime(time: t),
+                    onDateTap: () =>
+                        _toggleEditor(_DateTimeEditorTarget.startDate),
+                    onTimeTap: () =>
+                        _toggleEditor(_DateTimeEditorTarget.startTime),
+                  ),
+                  const SizedBox(height: 10),
+                  _DateTimePicker(
+                    label: 'End',
+                    date: _endDate,
+                    time: _endTime,
+                    showTime: !_allDay,
+                    isDateEditorVisible:
+                        _activeEditor == _DateTimeEditorTarget.endDate,
+                    isTimeEditorVisible:
+                        _activeEditor == _DateTimeEditorTarget.endTime,
+                    onDateChanged: (d) => setState(() => _endDate = d),
+                    onTimeChanged: (t) => setState(() => _endTime = t),
+                    onDateTap: () =>
+                        _toggleEditor(_DateTimeEditorTarget.endDate),
+                    onTimeTap: () =>
+                        _toggleEditor(_DateTimeEditorTarget.endTime),
+                  ),
+                  if (!_allDay) ...[
+                    const SizedBox(height: 8),
+                    _TimezoneTile(
+                      timezone: _timezone,
+                      onChanged: (tz) => setState(() => _timezone = tz),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  _CalendarPickerTile(
+                    selectedCalendarId: _calendarId,
+                    onChanged: (id) => setState(() => _calendarId = id),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _descriptionController,
-              decoration: const InputDecoration(
-                labelText: 'Description',
-                border: OutlineInputBorder(),
+            const SizedBox(height: 10),
+            _FormSection(
+              title: 'Recurrence & alerts',
+              child: Column(
+                children: [
+                  if (!_isException)
+                    _RecurrencePicker(
+                      rule: _recurrenceRule,
+                      onChanged: (r) => setState(() => _recurrenceRule = r),
+                    ),
+                  if (!_isException) const SizedBox(height: 10),
+                  ReminderMinutesPickerTile(
+                    reminderMinutes: _reminderMinutes ?? const [],
+                    title: 'Alerts',
+                    subtitle: 'Remind me',
+                    onChanged: (minutes) =>
+                        setState(() => _reminderMinutes = minutes),
+                  ),
+                ],
               ),
-              maxLines: 4,
+            ),
+            const SizedBox(height: 10),
+            _FormSection(
+              title: 'Notes',
+              child: Column(
+                children: [
+                  TextFormField(
+                    controller: _locationController,
+                    decoration: const InputDecoration(
+                      labelText: 'Location',
+                      prefixIcon: Icon(Icons.location_on),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _descriptionController,
+                    decoration: const InputDecoration(labelText: 'Description'),
+                    maxLines: 4,
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -576,10 +603,11 @@ class _DateTimePicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final editorDecoration = BoxDecoration(
-      border: Border.all(color: Theme.of(context).dividerColor),
+      border: Border.all(color: scheme.outlineVariant),
       borderRadius: BorderRadius.circular(12),
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      color: scheme.surfaceContainerLow,
     );
 
     return Column(
@@ -591,8 +619,21 @@ class _DateTimePicker extends StatelessWidget {
               flex: 3,
               child: OutlinedButton.icon(
                 key: Key('${label.toLowerCase()}-date-button'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 10,
+                  ),
+                ),
                 icon: const Icon(Icons.calendar_today, size: 18),
-                label: Text('$label: ${date.month}/${date.day}/${date.year}'),
+                label: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    '$label: ${date.month}/${date.day}/${date.year}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
                 onPressed: onDateTap,
               ),
             ),
@@ -602,8 +643,21 @@ class _DateTimePicker extends StatelessWidget {
                 flex: 2,
                 child: OutlinedButton.icon(
                   key: Key('${label.toLowerCase()}-time-button'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 10,
+                    ),
+                  ),
                   icon: const Icon(Icons.access_time, size: 18),
-                  label: Text(time.format(context)),
+                  label: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      time.format(context),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
                   onPressed: onTimeTap,
                 ),
               ),
@@ -638,6 +692,36 @@ class _DateTimePicker extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _FormSection extends StatelessWidget {
+  final String title;
+  final Widget child;
+
+  const _FormSection({required this.title, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            child,
+          ],
+        ),
+      ),
     );
   }
 }
