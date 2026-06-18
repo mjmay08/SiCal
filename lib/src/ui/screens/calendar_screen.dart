@@ -295,7 +295,14 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
       59,
     ).add(const Duration(days: 1));
     final repo = await ref.read(calendarRepositoryProvider.future);
-    final events = repo.getEventsInRange(first, last);
+    final visibleCalendarIds = await ref.read(
+      visibleCalendarIdsProvider.future,
+    );
+    final events = repo.getEventsInRange(
+      first,
+      last,
+      calendarIds: visibleCalendarIds,
+    );
     // Await the first emission so we never bucket events with a null timezone.
     String? deviceTz;
     try {
@@ -459,9 +466,15 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
       eventsForDayProvider(_selectedDay ?? _focusedDay),
     );
     final deviceTz = ref.watch(deviceTimezoneProvider).asData?.value;
+    final visibleCalendarIds =
+        ref.watch(visibleCalendarIdsProvider).value?.toSet() ??
+        const <String>{};
     final selectedDayKey = _normalizeDay(_selectedDay ?? _focusedDay);
     final markerDayEvents =
         (_eventsByDay[selectedDayKey] ?? const <CalendarEvent>[]).toList()
+          ..retainWhere(
+            (event) => visibleCalendarIds.contains(event.calendarId),
+          )
           ..sort(
             (a, b) => effectiveDisplayStart(
               a,
@@ -499,18 +512,11 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () async {
-              final didChange = await Navigator.of(context).push<bool>(
+              await Navigator.of(context).push<bool>(
                 MaterialPageRoute(builder: (_) => const SettingsScreen()),
               );
-              if (didChange == true) {
-                ref.invalidate(eventsForDayProvider);
-                _loadVisibleEvents();
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Import complete')),
-                  );
-                }
-              }
+              ref.invalidate(eventsForDayProvider);
+              _loadVisibleEvents();
             },
           ),
         ],
@@ -717,8 +723,13 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
           Expanded(
             child: eventsAsync.when(
               data: (events) {
+                final visibleEvents = events
+                    .where(
+                      (event) => visibleCalendarIds.contains(event.calendarId),
+                    )
+                    .toList();
                 final byKey = <String, CalendarEvent>{
-                  for (final e in events)
+                  for (final e in visibleEvents)
                     '${e.id}|${(e.instanceStart ?? e.start).toIso8601String()}':
                         e,
                 };
