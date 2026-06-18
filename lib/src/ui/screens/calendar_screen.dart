@@ -783,8 +783,6 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
   }
 
   void _createEvent() async {
-    final selectedCalendarId =
-        ref.read(selectedCalendarIdProvider) ?? kDefaultCalendarId;
     final result = await Navigator.of(context).push<CalendarEvent>(
       MaterialPageRoute(
         builder: (_) =>
@@ -793,7 +791,7 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
     );
     if (result != null) {
       final repo = await ref.read(calendarRepositoryProvider.future);
-      repo.createEvent(result.copyWith(calendarId: selectedCalendarId));
+      repo.createEvent(result);
       ref.invalidate(eventsForDayProvider);
       _loadVisibleEvents();
     }

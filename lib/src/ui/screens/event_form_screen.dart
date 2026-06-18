@@ -265,6 +265,7 @@ class _EventFormScreenState extends ConsumerState<EventFormScreen> {
 
     final event =
         widget.existingEvent?.copyWith(
+          calendarId: _calendarId,
           title: _titleController.text.trim(),
           description: _descriptionController.text.trim(),
           start: start,
