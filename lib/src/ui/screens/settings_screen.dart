@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:uuid/uuid.dart';
 import '../../bridge/sia_bridge.dart';
 import '../../models/calendar.dart';
@@ -21,6 +22,15 @@ const _calendarPalette = <String>[
   '#8B5CF6',
   '#10B981',
 ];
+
+final appVersionProvider = FutureProvider<String>((ref) async {
+  final info = await PackageInfo.fromPlatform();
+  final build = info.buildNumber.trim();
+  if (build.isEmpty) {
+    return 'v${info.version}';
+  }
+  return 'v${info.version}+${info.buildNumber}';
+});
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -87,10 +97,23 @@ class SettingsScreen extends ConsumerWidget {
           ),
           const Divider(),
           _SectionHeader('About'),
-          const ListTile(
-            leading: Icon(Icons.info_outline),
-            title: Text('SiCal'),
-            subtitle: Text('v1.0.0 — Powered by the Sia decentralized network'),
+          Consumer(
+            builder: (context, ref, _) {
+              final appVersionAsync = ref.watch(appVersionProvider);
+              return ListTile(
+                leading: Icon(Icons.info_outline),
+                title: const Text('SiCal'),
+                subtitle: Text(
+                  appVersionAsync.when(
+                    data: (version) =>
+                        '$version - Powered by the Sia decentralized network',
+                    loading: () => 'Loading version...',
+                    error: (_, __) =>
+                        'Powered by the Sia decentralized network',
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
