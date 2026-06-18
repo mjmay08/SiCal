@@ -127,6 +127,9 @@ DateTime effectiveOccurrenceEnd(CalendarEvent event, String? deviceTz) {
 final eventsForDayProvider =
     FutureProvider.family<List<CalendarEvent>, DateTime>((ref, day) async {
       final repo = await ref.watch(calendarRepositoryProvider.future);
+      final visibleCalendarIds = await ref.watch(
+        visibleCalendarIdsProvider.future,
+      );
       String? deviceTz;
       try {
         // Ensure timezone-aware events are filtered against the selected day
@@ -144,7 +147,11 @@ final eventsForDayProvider =
         day.month,
         day.day,
       ).add(const Duration(days: 2));
-      final candidates = repo.getEventsInRange(from, to);
+      final candidates = repo.getEventsInRange(
+        from,
+        to,
+        calendarIds: visibleCalendarIds,
+      );
 
       final dayStart = DateTime(day.year, day.month, day.day);
       final dayEnd = dayStart.add(const Duration(days: 1));

@@ -295,7 +295,14 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
       59,
     ).add(const Duration(days: 1));
     final repo = await ref.read(calendarRepositoryProvider.future);
-    final events = repo.getEventsInRange(first, last);
+    final visibleCalendarIds = await ref.read(
+      visibleCalendarIdsProvider.future,
+    );
+    final events = repo.getEventsInRange(
+      first,
+      last,
+      calendarIds: visibleCalendarIds,
+    );
     // Await the first emission so we never bucket events with a null timezone.
     String? deviceTz;
     try {
@@ -338,13 +345,17 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
       borderRadius: BorderRadius.circular(8),
       onTap: _showMonthYearPicker,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('${_monthNames[focusedDay.month - 1]} ${focusedDay.year}'),
-            const SizedBox(width: 4),
-            const Icon(Icons.arrow_drop_down),
+            Text(
+              '${_monthNames[focusedDay.month - 1]} ${focusedDay.year}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(width: 2),
+            const Icon(Icons.arrow_drop_down, size: 20),
           ],
         ),
       ),
@@ -459,9 +470,15 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
       eventsForDayProvider(_selectedDay ?? _focusedDay),
     );
     final deviceTz = ref.watch(deviceTimezoneProvider).asData?.value;
+    final visibleCalendarIds =
+        ref.watch(visibleCalendarIdsProvider).value?.toSet() ??
+        const <String>{};
     final selectedDayKey = _normalizeDay(_selectedDay ?? _focusedDay);
     final markerDayEvents =
         (_eventsByDay[selectedDayKey] ?? const <CalendarEvent>[]).toList()
+          ..retainWhere(
+            (event) => visibleCalendarIds.contains(event.calendarId),
+          )
           ..sort(
             (a, b) => effectiveDisplayStart(
               a,
@@ -499,18 +516,11 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () async {
-              final didChange = await Navigator.of(context).push<bool>(
+              await Navigator.of(context).push<bool>(
                 MaterialPageRoute(builder: (_) => const SettingsScreen()),
               );
-              if (didChange == true) {
-                ref.invalidate(eventsForDayProvider);
-                _loadVisibleEvents();
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Import complete')),
-                  );
-                }
-              }
+              ref.invalidate(eventsForDayProvider);
+              _loadVisibleEvents();
             },
           ),
         ],
@@ -518,248 +528,316 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
       body: Column(
         children: [
           const SyncStatusBanner(),
-          TableCalendar<CalendarEvent>(
-            firstDay: DateTime(_minYear, 1, 1),
-            lastDay: DateTime(_maxYear, 12, 31),
-            focusedDay: _focusedDay,
-            startingDayOfWeek: _weekStartsOn,
-            rowHeight: 76,
-            calendarFormat: _calendarFormat,
-            selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
-            eventLoader: (day) => _eventsByDay[_normalizeDay(day)] ?? [],
-            onDaySelected: (selectedDay, focusedDay) {
-              setState(() {
-                _selectedDay = selectedDay;
-                _focusedDay = focusedDay;
-              });
-            },
-            onFormatChanged: (format) =>
-                setState(() => _calendarFormat = format),
-            onPageChanged: (focusedDay) {
-              _focusedDay = focusedDay;
-              _loadVisibleEvents();
-            },
-            calendarBuilders: CalendarBuilders(
-              headerTitleBuilder: (context, day) =>
-                  _buildHeaderMonthYearTitle(day),
-              selectedBuilder: (context, day, focusedDay) =>
-                  _buildDayCell(context, day, isSelected: true),
-              todayBuilder: (context, day, focusedDay) =>
-                  _buildDayCell(context, day, isToday: true),
-              defaultBuilder: (context, day, focusedDay) =>
-                  _buildDayCell(context, day),
-              outsideBuilder: (context, day, focusedDay) =>
-                  _buildDayCell(context, day, isOutside: true),
-              markerBuilder: (context, day, events) {
-                if (events.isEmpty) return const SizedBox.shrink();
-                final dayEvents = events.cast<CalendarEvent>().toList()
-                  ..sort((a, b) {
-                    if (a.allDay != b.allDay) return a.allDay ? -1 : 1;
-                    return effectiveOccurrenceStart(
-                      a,
-                      deviceTz,
-                    ).compareTo(effectiveOccurrenceStart(b, deviceTz));
-                  });
-                final weekLanes = _computeWeekAllDayLanes(day, deviceTz);
-                final allDayByLane = <int, CalendarEvent>{};
-                for (final event in dayEvents.where((event) => event.allDay)) {
-                  final lane = weekLanes.lanes[_occurrenceKey(event)];
-                  if (lane != null) allDayByLane[lane] = event;
-                }
-                final allDayRowsForDay = allDayByLane.isEmpty
-                    ? 0
-                    : (allDayByLane.keys.reduce((a, b) => a > b ? a : b) + 1);
-                final timedEvents = dayEvents
-                    .where((event) => !event.allDay)
-                    .toList();
-                return Align(
-                  alignment: Alignment.bottomCenter,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(3, 22, 3, 3),
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final rowCount = _markerMaxRows;
-                        final markerHeight =
-                            rowCount * _markerRowHeight +
-                            (rowCount - 1) * _markerRowGap;
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
+                child: TableCalendar<CalendarEvent>(
+                  firstDay: DateTime(_minYear, 1, 1),
+                  lastDay: DateTime(_maxYear, 12, 31),
+                  focusedDay: _focusedDay,
+                  startingDayOfWeek: _weekStartsOn,
+                  rowHeight: 76,
+                  calendarFormat: _calendarFormat,
+                  selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
+                  eventLoader: (day) => _eventsByDay[_normalizeDay(day)] ?? [],
+                  onDaySelected: (selectedDay, focusedDay) {
+                    setState(() {
+                      _selectedDay = selectedDay;
+                      _focusedDay = focusedDay;
+                    });
+                  },
+                  onFormatChanged: (format) =>
+                      setState(() => _calendarFormat = format),
+                  onPageChanged: (focusedDay) {
+                    _focusedDay = focusedDay;
+                    _loadVisibleEvents();
+                  },
+                  calendarBuilders: CalendarBuilders(
+                    headerTitleBuilder: (context, day) =>
+                        _buildHeaderMonthYearTitle(day),
+                    selectedBuilder: (context, day, focusedDay) =>
+                        _buildDayCell(context, day, isSelected: true),
+                    todayBuilder: (context, day, focusedDay) =>
+                        _buildDayCell(context, day, isToday: true),
+                    defaultBuilder: (context, day, focusedDay) =>
+                        _buildDayCell(context, day),
+                    outsideBuilder: (context, day, focusedDay) =>
+                        _buildDayCell(context, day, isOutside: true),
+                    markerBuilder: (context, day, events) {
+                      if (events.isEmpty) return const SizedBox.shrink();
+                      final dayEvents = events.cast<CalendarEvent>().toList()
+                        ..sort((a, b) {
+                          if (a.allDay != b.allDay) return a.allDay ? -1 : 1;
+                          return effectiveOccurrenceStart(
+                            a,
+                            deviceTz,
+                          ).compareTo(effectiveOccurrenceStart(b, deviceTz));
+                        });
+                      final weekLanes = _computeWeekAllDayLanes(day, deviceTz);
+                      final allDayByLane = <int, CalendarEvent>{};
+                      for (final event in dayEvents.where(
+                        (event) => event.allDay,
+                      )) {
+                        final lane = weekLanes.lanes[_occurrenceKey(event)];
+                        if (lane != null) allDayByLane[lane] = event;
+                      }
+                      final allDayRowsForDay = allDayByLane.isEmpty
+                          ? 0
+                          : (allDayByLane.keys.reduce((a, b) => a > b ? a : b) +
+                                1);
+                      final timedEvents = dayEvents
+                          .where((event) => !event.allDay)
+                          .toList();
+                      return Align(
+                        alignment: Alignment.bottomCenter,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(3, 22, 3, 3),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final rowCount = _markerMaxRows;
+                              final markerHeight =
+                                  rowCount * _markerRowHeight +
+                                  (rowCount - 1) * _markerRowGap;
 
-                        final rowWidgets = <Widget>[];
-                        final rowEventKeys = <String?>[];
+                              final rowWidgets = <Widget>[];
+                              final rowEventKeys = <String?>[];
 
-                        void addRow(Widget widget, {String? eventKey}) {
-                          if (rowWidgets.length >= rowCount) return;
-                          rowWidgets.add(widget);
-                          rowEventKeys.add(eventKey);
-                        }
+                              void addRow(Widget widget, {String? eventKey}) {
+                                if (rowWidgets.length >= rowCount) return;
+                                rowWidgets.add(widget);
+                                rowEventKeys.add(eventKey);
+                              }
 
-                        Widget buildRow(CalendarEvent item) {
-                          if (item.allDay) {
-                            return _buildAllDayMarker(
-                              context,
-                              constraints: constraints,
-                              day: day,
-                              event: item,
-                              color: _calendarColor(
-                                calendarLookup[item.calendarId]?.color,
-                                fallback: Theme.of(context).colorScheme.primary,
-                              ),
-                              deviceTz: deviceTz,
-                            );
-                          }
-                          return SizedBox(
-                            height: _markerRowHeight,
-                            child: Text(
-                              item.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.labelSmall
-                                  ?.copyWith(
-                                    fontSize: 9,
-                                    height: 1.05,
+                              Widget buildRow(CalendarEvent item) {
+                                if (item.allDay) {
+                                  return _buildAllDayMarker(
+                                    context,
+                                    constraints: constraints,
+                                    day: day,
+                                    event: item,
                                     color: _calendarColor(
                                       calendarLookup[item.calendarId]?.color,
                                       fallback: Theme.of(
                                         context,
                                       ).colorScheme.primary,
                                     ),
+                                    deviceTz: deviceTz,
+                                  );
+                                }
+                                return SizedBox(
+                                  height: _markerRowHeight,
+                                  child: Text(
+                                    item.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall
+                                        ?.copyWith(
+                                          fontSize: 9,
+                                          height: 1.05,
+                                          color: _calendarColor(
+                                            calendarLookup[item.calendarId]
+                                                ?.color,
+                                            fallback: Theme.of(
+                                              context,
+                                            ).colorScheme.primary,
+                                          ),
+                                        ),
                                   ),
-                            ),
-                          );
-                        }
+                                );
+                              }
 
-                        for (
-                          var lane = 0;
-                          lane < allDayRowsForDay && lane < rowCount;
-                          lane++
-                        ) {
-                          final event = allDayByLane[lane];
-                          if (event != null) {
-                            addRow(
-                              buildRow(event),
-                              eventKey: _occurrenceKey(event),
-                            );
-                          } else {
-                            addRow(const SizedBox(height: _markerRowHeight));
-                          }
-                        }
+                              for (
+                                var lane = 0;
+                                lane < allDayRowsForDay && lane < rowCount;
+                                lane++
+                              ) {
+                                final event = allDayByLane[lane];
+                                if (event != null) {
+                                  addRow(
+                                    buildRow(event),
+                                    eventKey: _occurrenceKey(event),
+                                  );
+                                } else {
+                                  addRow(
+                                    const SizedBox(height: _markerRowHeight),
+                                  );
+                                }
+                              }
 
-                        for (final event in timedEvents) {
-                          if (rowWidgets.length >= rowCount) break;
-                          addRow(
-                            buildRow(event),
-                            eventKey: _occurrenceKey(event),
-                          );
-                        }
+                              for (final event in timedEvents) {
+                                if (rowWidgets.length >= rowCount) break;
+                                addRow(
+                                  buildRow(event),
+                                  eventKey: _occurrenceKey(event),
+                                );
+                              }
 
-                        while (rowWidgets.length < rowCount) {
-                          addRow(const SizedBox(height: _markerRowHeight));
-                        }
+                              while (rowWidgets.length < rowCount) {
+                                addRow(
+                                  const SizedBox(height: _markerRowHeight),
+                                );
+                              }
 
-                        final visibleKeys = rowEventKeys
-                            .whereType<String>()
-                            .toSet();
-                        var hiddenCount = dayEvents.length - visibleKeys.length;
-                        if (hiddenCount > 0) {
-                          final moreRowIndex = rowCount - 1;
-                          final replacedKey = rowEventKeys[moreRowIndex];
-                          if (replacedKey != null) {
-                            visibleKeys.remove(replacedKey);
-                          }
-                          hiddenCount = dayEvents.length - visibleKeys.length;
-                          rowWidgets[moreRowIndex] = SizedBox(
-                            height: _markerRowHeight,
-                            child: Text(
-                              '+$hiddenCount more',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.labelSmall
-                                  ?.copyWith(
-                                    fontSize: 8,
-                                    height: 1.0,
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.outline,
+                              final visibleKeys = rowEventKeys
+                                  .whereType<String>()
+                                  .toSet();
+                              var hiddenCount =
+                                  dayEvents.length - visibleKeys.length;
+                              if (hiddenCount > 0) {
+                                final moreRowIndex = rowCount - 1;
+                                final replacedKey = rowEventKeys[moreRowIndex];
+                                if (replacedKey != null) {
+                                  visibleKeys.remove(replacedKey);
+                                }
+                                hiddenCount =
+                                    dayEvents.length - visibleKeys.length;
+                                rowWidgets[moreRowIndex] = SizedBox(
+                                  height: _markerRowHeight,
+                                  child: Text(
+                                    '+$hiddenCount more',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall
+                                        ?.copyWith(
+                                          fontSize: 8,
+                                          height: 1.0,
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.outline,
+                                        ),
                                   ),
-                            ),
-                          );
-                          rowEventKeys[moreRowIndex] = null;
-                        }
+                                );
+                                rowEventKeys[moreRowIndex] = null;
+                              }
 
-                        return SizedBox(
-                          height: markerHeight,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              for (var row = 0; row < rowCount; row++) ...[
-                                rowWidgets[row],
-                                if (row != rowCount - 1)
-                                  const SizedBox(height: _markerRowGap),
-                              ],
-                            ],
+                              return SizedBox(
+                                height: markerHeight,
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    for (
+                                      var row = 0;
+                                      row < rowCount;
+                                      row++
+                                    ) ...[
+                                      rowWidgets[row],
+                                      if (row != rowCount - 1)
+                                        const SizedBox(height: _markerRowGap),
+                                    ],
+                                  ],
+                                ),
+                              );
+                            },
                           ),
-                        );
-                      },
+                        ),
+                      );
+                    },
+                  ),
+                  calendarStyle: CalendarStyle(
+                    cellMargin: const EdgeInsets.all(1.5),
+                    cellPadding: const EdgeInsets.all(2),
+                    selectedTextStyle: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurface,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                );
-              },
-            ),
-            calendarStyle: CalendarStyle(
-              cellMargin: const EdgeInsets.all(1.5),
-              cellPadding: const EdgeInsets.all(2),
-              selectedTextStyle: TextStyle(
-                color: Theme.of(context).colorScheme.onSurface,
-                fontWeight: FontWeight.w700,
+                  headerStyle: const HeaderStyle(
+                    formatButtonVisible: false,
+                    titleCentered: true,
+                    headerPadding: EdgeInsets.symmetric(
+                      horizontal: 2,
+                      vertical: 6,
+                    ),
+                    leftChevronPadding: EdgeInsets.all(4),
+                    rightChevronPadding: EdgeInsets.all(4),
+                    leftChevronMargin: EdgeInsets.only(left: 2),
+                    rightChevronMargin: EdgeInsets.only(right: 2),
+                  ),
+                ),
               ),
             ),
           ),
-          const Divider(height: 1),
           Expanded(
-            child: eventsAsync.when(
-              data: (events) {
-                final byKey = <String, CalendarEvent>{
-                  for (final e in events)
-                    '${e.id}|${(e.instanceStart ?? e.start).toIso8601String()}':
-                        e,
-                };
-                for (final e in markerDayEvents) {
-                  final key =
-                      '${e.id}|${(e.instanceStart ?? e.start).toIso8601String()}';
-                  byKey.putIfAbsent(key, () => e);
-                }
-                final displayEvents = byKey.values.toList()
-                  ..sort(
-                    (a, b) => effectiveOccurrenceStart(
-                      a,
-                      deviceTz,
-                    ).compareTo(effectiveOccurrenceStart(b, deviceTz)),
-                  );
-                return displayEvents.isEmpty
-                    ? const Center(child: Text('No events'))
-                    : ListView.builder(
-                        itemCount: displayEvents.length,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+              child: eventsAsync.when(
+                data: (events) {
+                  final visibleEvents = events
+                      .where(
+                        (event) =>
+                            visibleCalendarIds.contains(event.calendarId),
+                      )
+                      .toList();
+                  final byKey = <String, CalendarEvent>{
+                    for (final e in visibleEvents)
+                      '${e.id}|${(e.instanceStart ?? e.start).toIso8601String()}':
+                          e,
+                  };
+                  for (final e in markerDayEvents) {
+                    final key =
+                        '${e.id}|${(e.instanceStart ?? e.start).toIso8601String()}';
+                    byKey.putIfAbsent(key, () => e);
+                  }
+                  final displayEvents = byKey.values.toList()
+                    ..sort(
+                      (a, b) => effectiveOccurrenceStart(
+                        a,
+                        deviceTz,
+                      ).compareTo(effectiveOccurrenceStart(b, deviceTz)),
+                    );
+                  return displayEvents.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.event_busy,
+                                size: 28,
+                                color: Theme.of(context).colorScheme.outline,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'No events for this day',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.separated(
+                          itemCount: displayEvents.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final event = displayEvents[index];
+                            return _EventListTile(
+                              event: event,
+                              onTap: () => _openEventDetail(event),
+                            );
+                          },
+                        );
+                },
+                loading: () => markerDayEvents.isNotEmpty
+                    ? ListView.separated(
+                        itemCount: markerDayEvents.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
                         itemBuilder: (context, index) {
-                          final event = displayEvents[index];
+                          final event = markerDayEvents[index];
                           return _EventListTile(
                             event: event,
                             onTap: () => _openEventDetail(event),
                           );
                         },
-                      );
-              },
-              loading: () => markerDayEvents.isNotEmpty
-                  ? ListView.builder(
-                      itemCount: markerDayEvents.length,
-                      itemBuilder: (context, index) {
-                        final event = markerDayEvents[index];
-                        return _EventListTile(
-                          event: event,
-                          onTap: () => _openEventDetail(event),
-                        );
-                      },
-                    )
-                  : const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Center(child: Text('Error: $e')),
+                      )
+                    : const Center(child: CircularProgressIndicator()),
+                error: (e, _) => Center(child: Text('Error: $e')),
+              ),
             ),
           ),
         ],
@@ -772,8 +850,6 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
   }
 
   void _createEvent() async {
-    final selectedCalendarId =
-        ref.read(selectedCalendarIdProvider) ?? kDefaultCalendarId;
     final result = await Navigator.of(context).push<CalendarEvent>(
       MaterialPageRoute(
         builder: (_) =>
@@ -782,7 +858,7 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
     );
     if (result != null) {
       final repo = await ref.read(calendarRepositoryProvider.future);
-      repo.createEvent(result.copyWith(calendarId: selectedCalendarId));
+      repo.createEvent(result);
       ref.invalidate(eventsForDayProvider);
       _loadVisibleEvents();
     }
@@ -925,49 +1001,79 @@ class _EventListTile extends ConsumerWidget {
     }
 
     final timeFormat = TimeOfDay.fromDateTime(displayStart);
-    return ListTile(
-      leading: event.allDay
-          ? Icon(
-              Icons.calendar_today,
-              color: _calendarColor(
-                calendarLookup[event.calendarId]?.color,
-                fallback: Theme.of(context).colorScheme.primary,
+    final accentColor = _calendarColor(
+      calendarLookup[event.calendarId]?.color,
+      fallback: Theme.of(context).colorScheme.primary,
+    );
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: accentColor.withAlpha(35),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  event.allDay ? Icons.calendar_today : Icons.access_time,
+                  size: 18,
+                  color: accentColor,
+                ),
               ),
-            )
-          : Icon(
-              Icons.access_time,
-              color: _calendarColor(
-                calendarLookup[event.calendarId]?.color,
-                fallback: Theme.of(context).colorScheme.primary,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      event.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      event.allDay
+                          ? 'All day'
+                          : '${timeFormat.format(context)} – ${TimeOfDay.fromDateTime(displayEnd).format(context)}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
               ),
-            ),
-      title: Text(event.title),
-      subtitle: Text(
-        event.allDay
-            ? 'All day'
-            : '${timeFormat.format(context)} – ${TimeOfDay.fromDateTime(displayEnd).format(context)}',
+              if (event.isRecurring ||
+                  event.isVirtualInstance ||
+                  event.isException)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: Icon(
+                    Icons.repeat,
+                    size: 17,
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                ),
+              if (event.isDirty)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: Icon(
+                    Icons.cloud_upload_outlined,
+                    size: 17,
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (event.isRecurring || event.isVirtualInstance || event.isException)
-            Icon(
-              Icons.repeat,
-              size: 16,
-              color: Theme.of(context).colorScheme.outline,
-            ),
-          if (event.isDirty)
-            Padding(
-              padding: const EdgeInsets.only(left: 4),
-              child: Icon(
-                Icons.cloud_upload_outlined,
-                size: 16,
-                color: Theme.of(context).colorScheme.outline,
-              ),
-            ),
-        ],
-      ),
-      onTap: onTap,
     );
   }
 }

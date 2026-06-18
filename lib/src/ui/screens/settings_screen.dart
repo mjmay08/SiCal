@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:uuid/uuid.dart';
 import '../../bridge/sia_bridge.dart';
 import '../../models/calendar.dart';
@@ -9,6 +10,7 @@ import '../../services/auth_service.dart';
 import '../../services/event_notification_service.dart';
 import '../../services/ics_import_service.dart';
 import '../../services/timezone_service.dart';
+import '../../utils/reminder_time_format.dart';
 import '../widgets/reminder_minutes_picker.dart';
 
 const _calendarPalette = <String>[
@@ -20,6 +22,15 @@ const _calendarPalette = <String>[
   '#8B5CF6',
   '#10B981',
 ];
+
+final appVersionProvider = FutureProvider<String>((ref) async {
+  final info = await PackageInfo.fromPlatform();
+  final build = info.buildNumber.trim();
+  if (build.isEmpty) {
+    return 'v${info.version}';
+  }
+  return 'v${info.version}+${info.buildNumber}';
+});
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -47,13 +58,13 @@ class SettingsScreen extends ConsumerWidget {
           ),
           const Divider(),
           _SectionHeader('Calendar'),
-          _CalendarNameTile(),
-          _CalendarTimezoneTile(),
           const _DefaultAlertTile(),
           ListTile(
             leading: const Icon(Icons.calendar_view_month),
             title: const Text('Manage Calendars'),
-            subtitle: const Text('Add calendars and toggle visibility'),
+            subtitle: const Text(
+              'Add calendars, edit name/timezone, and toggle visibility',
+            ),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const _ManageCalendarsScreen()),
             ),
@@ -86,10 +97,23 @@ class SettingsScreen extends ConsumerWidget {
           ),
           const Divider(),
           _SectionHeader('About'),
-          const ListTile(
-            leading: Icon(Icons.info_outline),
-            title: Text('SiCal'),
-            subtitle: Text('v1.0.0 — Powered by the Sia decentralized network'),
+          Consumer(
+            builder: (context, ref, _) {
+              final appVersionAsync = ref.watch(appVersionProvider);
+              return ListTile(
+                leading: Icon(Icons.info_outline),
+                title: const Text('SiCal'),
+                subtitle: Text(
+                  appVersionAsync.when(
+                    data: (version) =>
+                        '$version - Powered by the Sia decentralized network',
+                    loading: () => 'Loading version...',
+                    error: (_, __) =>
+                        'Powered by the Sia decentralized network',
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -153,8 +177,14 @@ class SettingsScreen extends ConsumerWidget {
             onPressed: () async {
               Navigator.pop(ctx);
               final auth = ref.read(authServiceProvider);
+              final db = await ref.read(appDatabaseProvider.future);
+              db.clearAllTables();
               await auth.clearAll();
               await EventNotificationService.clearAll();
+              ref.invalidate(eventsForDayProvider);
+              ref.invalidate(calendarsProvider);
+              ref.invalidate(visibleCalendarIdsProvider);
+              ref.invalidate(calendarLookupProvider);
               ref.invalidate(authStateProvider);
               if (context.mounted) {
                 Navigator.of(context).popUntil((route) => route.isFirst);
@@ -307,190 +337,6 @@ class _SyncStatusTile extends ConsumerWidget {
   }
 }
 
-class _CalendarNameTile extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final calendarsAsync = ref.watch(calendarsProvider);
-    final selectedId =
-        ref.watch(selectedCalendarIdProvider) ?? kDefaultCalendarId;
-    return calendarsAsync.when(
-      data: (calendars) {
-        final selected = calendars.cast<CalendarInfo?>().firstWhere(
-          (c) => c?.id == selectedId,
-          orElse: () => null,
-        );
-        return ListTile(
-          leading: const Icon(Icons.edit),
-          title: const Text('Calendar Name'),
-          subtitle: Text(selected?.name ?? 'My Calendar'),
-          onTap: selected == null
-              ? null
-              : () => _editName(context, ref, selected),
-        );
-      },
-      loading: () => const ListTile(title: Text('Calendar Name')),
-      error: (_, __) => const ListTile(title: Text('Calendar Name')),
-    );
-  }
-
-  void _editName(BuildContext context, WidgetRef ref, CalendarInfo calendar) {
-    final controller = TextEditingController(text: calendar.name);
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Calendar Name'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Enter name'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              final name = controller.text.trim();
-              if (name.isNotEmpty) {
-                final repo = ref.read(calendarRepositoryProvider).value;
-                repo?.upsertCalendar(
-                  calendar.copyWith(
-                    name: name,
-                    updatedAt: DateTime.now().toUtc(),
-                  ),
-                );
-                ref.invalidate(calendarsProvider);
-              }
-              Navigator.pop(ctx);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CalendarTimezoneTile extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final calendarsAsync = ref.watch(calendarsProvider);
-    final selectedId =
-        ref.watch(selectedCalendarIdProvider) ?? kDefaultCalendarId;
-    return calendarsAsync.when(
-      data: (calendars) {
-        final selected = calendars.cast<CalendarInfo?>().firstWhere(
-          (c) => c?.id == selectedId,
-          orElse: () => null,
-        );
-        final current = selected?.timezone ?? 'UTC';
-        return ListTile(
-          leading: const Icon(Icons.language),
-          title: const Text('Calendar Timezone'),
-          subtitle: Text(current),
-          onTap: selected == null
-              ? null
-              : () => _pickTimezone(context, ref, selected, current),
-        );
-      },
-      loading: () => const ListTile(title: Text('Calendar Timezone')),
-      error: (_, __) => const ListTile(title: Text('Calendar Timezone')),
-    );
-  }
-
-  Future<void> _pickTimezone(
-    BuildContext context,
-    WidgetRef ref,
-    CalendarInfo calendar,
-    String current,
-  ) async {
-    final allTimezones = TimezoneService.getAllTimezones();
-    List<String> filtered = allTimezones;
-
-    final selected = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModalState) {
-          return DraggableScrollableSheet(
-            expand: false,
-            initialChildSize: 0.75,
-            minChildSize: 0.4,
-            maxChildSize: 0.95,
-            builder: (ctx, scrollController) => SafeArea(
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Calendar Timezone',
-                          style: Theme.of(ctx).textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          decoration: const InputDecoration(
-                            hintText: 'Search timezones…',
-                            prefixIcon: Icon(Icons.search),
-                            border: OutlineInputBorder(),
-                            isDense: true,
-                          ),
-                          onChanged: (q) {
-                            final lower = q.toLowerCase();
-                            setModalState(() {
-                              filtered = lower.isEmpty
-                                  ? allTimezones
-                                  : allTimezones
-                                        .where(
-                                          (tz) =>
-                                              tz.toLowerCase().contains(lower),
-                                        )
-                                        .toList();
-                            });
-                          },
-                          autofocus: true,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: ListView.builder(
-                      controller: scrollController,
-                      itemCount: filtered.length,
-                      itemBuilder: (ctx, i) {
-                        final tz = filtered[i];
-                        return ListTile(
-                          title: Text(tz),
-                          selected: tz == current,
-                          onTap: () => Navigator.pop(ctx, tz),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-
-    if (selected != null && selected != current) {
-      final repo = ref.read(calendarRepositoryProvider).value;
-      repo?.upsertCalendar(
-        calendar.copyWith(
-          timezone: selected,
-          updatedAt: DateTime.now().toUtc(),
-        ),
-      );
-      ref.invalidate(calendarsProvider);
-    }
-  }
-}
-
 class _DefaultAlertTile extends ConsumerWidget {
   const _DefaultAlertTile();
 
@@ -548,25 +394,37 @@ class _ManageCalendarsScreen extends ConsumerWidget {
         data: (calendars) => ListView(
           children: [
             for (final calendar in calendars)
-              SwitchListTile(
-                secondary: CircleAvatar(
-                  radius: 9,
-                  backgroundColor: _parseHexColor(calendar.color),
-                ),
-                title: Text(calendar.name),
-                subtitle: Text(calendar.timezone),
-                value: calendar.isVisible,
-                onChanged: (value) {
-                  final repo = ref.read(calendarRepositoryProvider).value;
-                  repo?.upsertCalendar(
-                    calendar.copyWith(
-                      isVisible: value,
-                      updatedAt: DateTime.now().toUtc(),
+              Column(
+                children: [
+                  ListTile(
+                    leading: CircleAvatar(
+                      radius: 9,
+                      backgroundColor: _parseHexColor(calendar.color),
                     ),
-                  );
-                  ref.invalidate(calendarsProvider);
-                  ref.invalidate(eventsForDayProvider);
-                },
+                    title: Text(calendar.name),
+                    subtitle: Text(calendar.timezone),
+                    trailing: IconButton(
+                      tooltip: 'Edit calendar',
+                      icon: const Icon(Icons.edit_outlined),
+                      onPressed: () => _editCalendar(context, ref, calendar),
+                    ),
+                  ),
+                  SwitchListTile(
+                    title: Text('Visible: ${calendar.name}'),
+                    value: calendar.isVisible,
+                    onChanged: (value) {
+                      final repo = ref.read(calendarRepositoryProvider).value;
+                      repo?.upsertCalendar(
+                        calendar.copyWith(
+                          isVisible: value,
+                          updatedAt: DateTime.now().toUtc(),
+                        ),
+                      );
+                      ref.invalidate(calendarsProvider);
+                      ref.invalidate(eventsForDayProvider);
+                    },
+                  ),
+                ],
               ),
             const Divider(height: 1),
             for (final calendar in calendars)
@@ -676,6 +534,153 @@ class _ManageCalendarsScreen extends ConsumerWidget {
       );
     }
   }
+
+  Future<void> _editCalendar(
+    BuildContext context,
+    WidgetRef ref,
+    CalendarInfo calendar,
+  ) async {
+    final nameController = TextEditingController(text: calendar.name);
+    var timezone = calendar.timezone;
+
+    final updated = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Edit Calendar'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: nameController,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'Calendar name'),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.language),
+                title: const Text('Calendar Timezone'),
+                subtitle: Text(timezone),
+                onTap: () async {
+                  final selected = await _showTimezonePicker(ctx, timezone);
+                  if (selected == null) return;
+                  setDialogState(() => timezone = selected);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (updated != true) return;
+    final name = nameController.text.trim();
+    if (name.isEmpty) return;
+
+    final changed = name != calendar.name || timezone != calendar.timezone;
+    if (!changed) return;
+
+    final repo = ref.read(calendarRepositoryProvider).value;
+    repo?.upsertCalendar(
+      calendar.copyWith(
+        name: name,
+        timezone: timezone,
+        updatedAt: DateTime.now().toUtc(),
+      ),
+    );
+    ref.invalidate(calendarsProvider);
+    ref.invalidate(eventsForDayProvider);
+  }
+}
+
+Future<String?> _showTimezonePicker(
+  BuildContext context,
+  String current,
+) async {
+  final allTimezones = TimezoneService.getAllTimezones();
+  List<String> filtered = allTimezones;
+
+  return showModalBottomSheet<String>(
+    context: context,
+    isScrollControlled: true,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setModalState) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.75,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          builder: (ctx, scrollController) => SafeArea(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Calendar Timezone',
+                        style: Theme.of(ctx).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        decoration: const InputDecoration(
+                          hintText: 'Search timezones…',
+                          prefixIcon: Icon(Icons.search),
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        onChanged: (q) {
+                          final lower = q.toLowerCase();
+                          setModalState(() {
+                            filtered = lower.isEmpty
+                                ? allTimezones
+                                : allTimezones
+                                      .where(
+                                        (tz) =>
+                                            tz.toLowerCase().contains(lower),
+                                      )
+                                      .toList();
+                          });
+                        },
+                        autofocus: true,
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    controller: scrollController,
+                    itemCount: filtered.length,
+                    itemBuilder: (ctx, i) {
+                      final tz = filtered[i];
+                      return ListTile(
+                        title: Text(tz),
+                        selected: tz == current,
+                        onTap: () => Navigator.pop(ctx, tz),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
 }
 
 Color _parseHexColor(String value) {

@@ -1,10 +1,7 @@
-import 'package:flutter/material.dart';
+import 'dart:collection';
 
-String formatReminderMinutes(List<int> reminderMinutes) {
-  if (reminderMinutes.isEmpty) return 'No alert';
-  final sorted = reminderMinutes.toSet().toList()..sort();
-  return sorted.map(_formatSingleReminder).join(', ');
-}
+import 'package:flutter/material.dart';
+import '../../utils/reminder_time_format.dart';
 
 class ReminderMinutesPickerTile extends StatelessWidget {
   final List<int> reminderMinutes;
@@ -32,6 +29,7 @@ class ReminderMinutesPickerTile extends StatelessWidget {
         final result = await showModalBottomSheet<List<int>>(
           context: context,
           isScrollControlled: true,
+          useSafeArea: true,
           builder: (_) => ReminderMinutesPickerSheet(
             title: title,
             initialReminderMinutes: reminderMinutes,
@@ -62,6 +60,11 @@ class _ReminderMinutesPickerSheetState
     extends State<ReminderMinutesPickerSheet> {
   static const _presets = <int>[0, 5, 10, 15, 30, 60, 1440];
   late final Set<int> _selected = widget.initialReminderMinutes.toSet();
+  late final LinkedHashSet<int> _customOptions = LinkedHashSet<int>.from(
+    widget.initialReminderMinutes.where(
+      (minutes) => !_presets.contains(minutes),
+    ),
+  );
   static const int _minCustomValue = 1;
   static const int _maxCustomValue = 200;
   int _customValue = 1;
@@ -82,169 +85,172 @@ class _ReminderMinutesPickerSheetState
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
+    final media = MediaQuery.of(context);
+    final maxHeight = media.size.height * 0.88;
+
+    return SizedBox(
+      height: maxHeight,
       child: Padding(
         padding: EdgeInsets.only(
           left: 16,
           right: 16,
           top: 16,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+          bottom: media.viewInsets.bottom + media.padding.bottom + 12,
         ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(widget.title, style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final minutes in _presets)
-                  FilterChip(
-                    label: Text(_formatPresetLabel(minutes)),
-                    selected: _selected.contains(minutes),
-                    onSelected: (selected) {
-                      setState(() {
-                        if (selected) {
-                          _selected.add(minutes);
-                        } else {
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _AlertOptionWrap(
+                      presets: _presets,
+                      customOptions: _customOptions,
+                      selected: _selected,
+                      onToggle: (minutes, selected) {
+                        setState(() {
+                          if (selected) {
+                            _selected.add(minutes);
+                          } else {
+                            _selected.remove(minutes);
+                          }
+                        });
+                      },
+                      onDeleteCustom: (minutes) {
+                        setState(() {
+                          _customOptions.remove(minutes);
                           _selected.remove(minutes);
-                        }
-                      });
-                    },
-                  ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text('Custom alert', style: Theme.of(context).textTheme.labelLarge),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 140,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  IgnorePointer(
-                    child: Container(
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
+                        });
+                      },
                     ),
-                  ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ListWheelScrollView.useDelegate(
-                          controller: _valueWheelController,
-                          itemExtent: 36,
-                          perspective: 0.003,
-                          physics: const FixedExtentScrollPhysics(),
-                          onSelectedItemChanged: (index) {
-                            setState(
-                              () => _customValue = _minCustomValue + index,
-                            );
-                          },
-                          childDelegate: ListWheelChildBuilderDelegate(
-                            childCount: _maxCustomValue - _minCustomValue + 1,
-                            builder: (context, index) {
-                              final value = _minCustomValue + index;
-                              final isSelected = value == _customValue;
-                              return Center(
-                                child: Text(
-                                  '$value',
-                                  style: TextStyle(
-                                    fontWeight: isSelected
-                                        ? FontWeight.w700
-                                        : FontWeight.w400,
-                                    color: isSelected
-                                        ? Theme.of(
-                                            context,
-                                          ).colorScheme.onPrimaryContainer
-                                        : Theme.of(
-                                            context,
-                                          ).colorScheme.onSurfaceVariant,
+                    const SizedBox(height: 16),
+                    Text(
+                      'Custom alert',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 140,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          IgnorePointer(
+                            child: Container(
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.primaryContainer,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                          ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ListWheelScrollView.useDelegate(
+                                  controller: _valueWheelController,
+                                  itemExtent: 36,
+                                  perspective: 0.003,
+                                  physics: const FixedExtentScrollPhysics(),
+                                  onSelectedItemChanged: (index) {
+                                    setState(
+                                      () => _customValue =
+                                          _minCustomValue + index,
+                                    );
+                                  },
+                                  childDelegate: ListWheelChildBuilderDelegate(
+                                    childCount:
+                                        _maxCustomValue - _minCustomValue + 1,
+                                    builder: (context, index) {
+                                      final value = _minCustomValue + index;
+                                      final isSelected = value == _customValue;
+                                      return Center(
+                                        child: Text(
+                                          '$value',
+                                          style: TextStyle(
+                                            fontWeight: isSelected
+                                                ? FontWeight.w700
+                                                : FontWeight.w400,
+                                            color: isSelected
+                                                ? Theme.of(context)
+                                                      .colorScheme
+                                                      .onPrimaryContainer
+                                                : Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurfaceVariant,
+                                          ),
+                                        ),
+                                      );
+                                    },
                                   ),
                                 ),
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: ListWheelScrollView.useDelegate(
-                          controller: _unitWheelController,
-                          itemExtent: 36,
-                          perspective: 0.003,
-                          physics: const FixedExtentScrollPhysics(),
-                          onSelectedItemChanged: (index) {
-                            setState(
-                              () => _customUnit = _ReminderUnit.values[index],
-                            );
-                          },
-                          childDelegate: ListWheelChildBuilderDelegate(
-                            childCount: _ReminderUnit.values.length,
-                            builder: (context, index) {
-                              final unit = _ReminderUnit.values[index];
-                              final isSelected = unit == _customUnit;
-                              return Center(
-                                child: Text(
-                                  unit.label,
-                                  style: TextStyle(
-                                    fontWeight: isSelected
-                                        ? FontWeight.w700
-                                        : FontWeight.w400,
-                                    color: isSelected
-                                        ? Theme.of(
-                                            context,
-                                          ).colorScheme.onPrimaryContainer
-                                        : Theme.of(
-                                            context,
-                                          ).colorScheme.onSurfaceVariant,
+                              ),
+                              Expanded(
+                                child: ListWheelScrollView.useDelegate(
+                                  controller: _unitWheelController,
+                                  itemExtent: 36,
+                                  perspective: 0.003,
+                                  physics: const FixedExtentScrollPhysics(),
+                                  onSelectedItemChanged: (index) {
+                                    setState(
+                                      () => _customUnit =
+                                          _ReminderUnit.values[index],
+                                    );
+                                  },
+                                  childDelegate: ListWheelChildBuilderDelegate(
+                                    childCount: _ReminderUnit.values.length,
+                                    builder: (context, index) {
+                                      final unit = _ReminderUnit.values[index];
+                                      final isSelected = unit == _customUnit;
+                                      return Center(
+                                        child: Text(
+                                          unit.label,
+                                          style: TextStyle(
+                                            fontWeight: isSelected
+                                                ? FontWeight.w700
+                                                : FontWeight.w400,
+                                            color: isSelected
+                                                ? Theme.of(context)
+                                                      .colorScheme
+                                                      .onPrimaryContainer
+                                                : Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurfaceVariant,
+                                          ),
+                                        ),
+                                      );
+                                    },
                                   ),
                                 ),
-                              );
-                            },
+                              ),
+                            ],
                           ),
-                        ),
+                        ],
                       ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Selected custom: ${_formatValueWithUnit(_customValue, _customUnit)}',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton(
-                onPressed: _addCustom,
-                child: const Text('Add custom'),
-              ),
-            ),
-            const SizedBox(height: 16),
-            if (_selected.isNotEmpty) ...[
-              Text('Selected', style: Theme.of(context).textTheme.labelLarge),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final minutes in _selected.toList()..sort())
-                    InputChip(
-                      label: Text(_formatSingleReminder(minutes)),
-                      onDeleted: () =>
-                          setState(() => _selected.remove(minutes)),
                     ),
-                ],
+                    const SizedBox(height: 8),
+                    Text(
+                      'Selected custom: ${_formatValueWithUnit(_customValue, _customUnit)}',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton(
+                        onPressed: _addCustom,
+                        child: const Text('Add custom'),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 16),
-            ],
+            ),
+            const SizedBox(height: 8),
             Row(
               children: [
                 TextButton(
@@ -273,6 +279,9 @@ class _ReminderMinutesPickerSheetState
   void _addCustom() {
     final minutes = _customValue * _customUnit.factorMinutes;
     setState(() {
+      if (!_presets.contains(minutes)) {
+        _customOptions.add(minutes);
+      }
       _selected.add(minutes);
     });
   }
@@ -289,44 +298,69 @@ enum _ReminderUnit {
   const _ReminderUnit(this.label, this.factorMinutes);
 }
 
-String _formatPresetLabel(int minutes) {
-  if (minutes == 0) return 'At start';
-  if (minutes % 10080 == 0) {
-    final weeks = minutes ~/ 10080;
-    return weeks == 1 ? '1 week' : '$weeks weeks';
+class _AlertOptionWrap extends StatelessWidget {
+  final List<int> presets;
+  final LinkedHashSet<int> customOptions;
+  final Set<int> selected;
+  final void Function(int minutes, bool selected) onToggle;
+  final ValueChanged<int> onDeleteCustom;
+
+  const _AlertOptionWrap({
+    required this.presets,
+    required this.customOptions,
+    required this.selected,
+    required this.onToggle,
+    required this.onDeleteCustom,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final options = <int>[...presets, ...customOptions];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final columns = width >= 520
+            ? 4
+            : width >= 380
+            ? 3
+            : 2;
+        const spacing = 8.0;
+
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: options.length,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
+            mainAxisExtent: 56,
+          ),
+          itemBuilder: (context, index) {
+            final minutes = options[index];
+            return FilterChip(
+              showCheckmark: false,
+              selected: selected.contains(minutes),
+              onSelected: (isSelected) => onToggle(minutes, isSelected),
+              label: Text(
+                minutes == 0 ? 'At start' : formatReminderLeadTime(minutes),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+              ),
+              onDeleted: presets.contains(minutes)
+                  ? null
+                  : () => onDeleteCustom(minutes),
+            );
+          },
+        );
+      },
+    );
   }
-  if (minutes % 1440 == 0) {
-    final days = minutes ~/ 1440;
-    return days == 1 ? '1 day' : '$days days';
-  }
-  if (minutes % 60 == 0) {
-    final hours = minutes ~/ 60;
-    return hours == 1 ? '1 hour' : '$hours hours';
-  }
-  return minutes == 1 ? '1 min' : '$minutes min';
 }
 
 String _formatValueWithUnit(int value, _ReminderUnit unit) {
   final singular = unit.label.substring(0, unit.label.length - 1);
   return '$value ${value == 1 ? singular : unit.label}';
-}
-
-String _formatSingleReminder(int minutes) {
-  if (minutes == 0) return 'At start';
-  if (minutes == 1) return '1 min before';
-  if (minutes < 60) return '$minutes min before';
-  if (minutes % 10080 == 0) {
-    final weeks = minutes ~/ 10080;
-    return weeks == 1 ? '1 week before' : '$weeks weeks before';
-  }
-  if (minutes % 1440 == 0) {
-    final days = minutes ~/ 1440;
-    return days == 1 ? '1 day before' : '$days days before';
-  }
-  if (minutes % 60 == 0) {
-    final hours = minutes ~/ 60;
-    return hours == 1 ? '1 hour before' : '$hours hours before';
-  }
-  final hours = minutes / 60;
-  return '${hours.toStringAsFixed(1)} hours before';
 }

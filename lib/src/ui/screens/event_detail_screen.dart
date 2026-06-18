@@ -5,7 +5,7 @@ import '../../models/event.dart';
 import '../../models/recurrence.dart';
 import '../../repositories/calendar_repository.dart';
 import '../../services/timezone_service.dart';
-import '../widgets/reminder_minutes_picker.dart';
+import '../../utils/reminder_time_format.dart';
 import 'event_form_screen.dart';
 
 class EventDetailScreen extends ConsumerStatefulWidget {
@@ -62,6 +62,7 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
     final calendar = calendarLookup[event.calendarId];
     final start = _displayStart ?? event.start;
     final end = _displayEnd ?? event.end;
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Event'),
@@ -76,66 +77,95 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
           ),
         ],
       ),
-      body: Padding(
+      body: ListView(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              event.title,
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 16),
-            _InfoRow(
-              icon: Icons.access_time,
-              label: event.allDay
-                  ? 'All day'
-                  : '${_formatDateTime(start)} \u2013 ${_formatDateTime(end)}',
-            ),
-            if (!event.allDay && event.timezone != null) ...[
-              _InfoRow(icon: Icons.language, label: _timezoneLabel(start)),
-            ],
-            _InfoRow(
-              icon: Icons.calendar_month,
-              label: calendar?.name ?? 'Calendar',
-            ),
-            if (event.location.isNotEmpty)
-              _InfoRow(
-                icon: Icons.location_on,
-                label: event.location,
-                onTap: _isUrl(event.location)
-                    ? () => launchUrl(
-                        Uri.parse(event.location),
-                        mode: LaunchMode.externalApplication,
-                      )
-                    : null,
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (event.isDirty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Chip(
+                        avatar: const Icon(
+                          Icons.cloud_upload_outlined,
+                          size: 16,
+                        ),
+                        label: const Text('Pending sync'),
+                      ),
+                    ),
+                  Text(
+                    event.title,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  _InfoRow(
+                    icon: Icons.access_time,
+                    label: event.allDay
+                        ? 'All day'
+                        : '${_formatDateTime(start)} \u2013 ${_formatDateTime(end)}',
+                  ),
+                  if (!event.allDay && event.timezone != null) ...[
+                    _InfoRow(
+                      icon: Icons.language,
+                      label: _timezoneLabel(start),
+                    ),
+                  ],
+                  _InfoRow(
+                    icon: Icons.calendar_month,
+                    label: calendar?.name ?? 'Calendar',
+                  ),
+                  if (event.location.isNotEmpty)
+                    _InfoRow(
+                      icon: Icons.location_on,
+                      label: event.location,
+                      onTap: _isUrl(event.location)
+                          ? () => launchUrl(
+                              Uri.parse(event.location),
+                              mode: LaunchMode.externalApplication,
+                            )
+                          : null,
+                    ),
+                  if (_hasRecurrence)
+                    _InfoRow(icon: Icons.repeat, label: _recurrenceLabel),
+                  _InfoRow(
+                    icon: event.reminderMinutes.isEmpty
+                        ? Icons.notifications_off
+                        : Icons.notifications,
+                    label: formatReminderMinutes(event.reminderMinutes),
+                  ),
+                ],
               ),
-            if (_hasRecurrence)
-              _InfoRow(icon: Icons.repeat, label: _recurrenceLabel),
-            if (event.description.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Description',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              const SizedBox(height: 4),
-              Text(event.description),
-            ],
-            const SizedBox(height: 16),
-            _InfoRow(
-              icon: event.reminderMinutes.isEmpty
-                  ? Icons.notifications_off
-                  : Icons.notifications,
-              label: formatReminderMinutes(event.reminderMinutes),
             ),
-            const Spacer(),
-            if (event.isDirty)
-              Chip(
-                avatar: const Icon(Icons.cloud_upload_outlined, size: 16),
-                label: const Text('Pending sync'),
+          ),
+          if (event.description.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Description',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: scheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(event.description),
+                  ],
+                ),
               ),
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -216,6 +246,7 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
         if (edited != null) {
           repo.editSingleOccurrence(resolvedMaster, instanceStart, edited);
         }
+        break;
       case _RecurrenceAction.thisAndFollowing:
         final edited = await Navigator.of(context).push<CalendarEvent>(
           MaterialPageRoute(
@@ -225,6 +256,7 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
         if (edited != null) {
           repo.editThisAndFollowing(resolvedMaster, instanceStart, edited);
         }
+        break;
       case _RecurrenceAction.allEvents:
         final edited = await Navigator.of(context).push<CalendarEvent>(
           MaterialPageRoute(
@@ -234,6 +266,7 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
         if (edited != null) {
           repo.editAllOccurrences(resolvedMaster, edited);
         }
+        break;
     }
 
     ref.invalidate(eventsForDayProvider);
@@ -299,10 +332,13 @@ class _EventDetailScreenState extends ConsumerState<EventDetailScreen> {
     switch (choice) {
       case _RecurrenceAction.thisEvent:
         repo.deleteSingleOccurrence(resolvedMaster, instanceStart);
+        break;
       case _RecurrenceAction.thisAndFollowing:
         repo.deleteThisAndFollowing(resolvedMaster, instanceStart);
+        break;
       case _RecurrenceAction.allEvents:
         repo.deleteAllOccurrences(resolvedMaster.id);
+        break;
     }
 
     ref.invalidate(eventsForDayProvider);
@@ -371,13 +407,14 @@ class _InfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final labelWidget = onTap != null
         ? GestureDetector(
             onTap: onTap,
             child: Text(
               label,
               style: TextStyle(
-                color: Theme.of(context).colorScheme.primary,
+                color: scheme.primary,
                 decoration: TextDecoration.underline,
               ),
             ),
@@ -385,11 +422,20 @@ class _InfoRow extends StatelessWidget {
         : Text(label);
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 20, color: Theme.of(context).colorScheme.outline),
-          const SizedBox(width: 12),
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: scheme.primary.withAlpha(22),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 16, color: scheme.primary),
+          ),
+          const SizedBox(width: 10),
           Expanded(child: labelWidget),
         ],
       ),
