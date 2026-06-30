@@ -393,6 +393,27 @@ class SyncEngine {
 
       // If chunk map present in metadata, sync those chunks too.
       if (chunkMap != null) {
+        final knownPeriods = _db
+            .getAllChunkPeriods(calendarId: manifestCalendarId)
+            .toSet();
+        final incomingPeriods = chunkMap.keys.cast<String>().toSet();
+        final removedPeriods = knownPeriods.difference(incomingPeriods);
+
+        for (final period in removedPeriods) {
+          final events = _db.getAllEventsForPeriod(
+            period,
+            calendarIds: [manifestCalendarId],
+          );
+          for (final e in events) {
+            _db.deleteEvent(e.id);
+          }
+          _db.markEventsClean(period, calendarId: manifestCalendarId);
+          _db.deleteChunk(period, calendarId: manifestCalendarId);
+          _log(
+            '_handlePinnedEvent: removed period [$period] with ${events.length} event(s) for calendar [$manifestCalendarId]',
+          );
+        }
+
         for (final entry in chunkMap.entries) {
           final period = entry.key;
           final chunkObjectId = entry.value as String;
@@ -429,6 +450,40 @@ class SyncEngine {
   }
 
   void _handleDeletedEvent(SiaObjectEvent event, {required String calendarId}) {
-    // Deleted events from Sia — for MVP, full-sync re-downloads manifest.
+    if (event.metadataJson == null) {
+      _log('_handleDeletedEvent: no metadata for ${event.objectId}; skipping');
+      return;
+    }
+    try {
+      final meta = jsonDecode(event.metadataJson!) as Map<String, dynamic>;
+      final type = meta['type'] as String?;
+      final objCalendarId = meta['calendar_id'] as String? ?? calendarId;
+
+      if (type == 'chunk') {
+        final period = meta['period'] as String;
+        final events = _db.getAllEventsForPeriod(
+          period,
+          calendarIds: [objCalendarId],
+        );
+        for (final e in events) {
+          _db.deleteEvent(e.id);
+        }
+        _db.markEventsClean(period, calendarId: objCalendarId);
+        _db.deleteChunk(period, calendarId: objCalendarId);
+        _log(
+          '_handleDeletedEvent: removed ${events.length} event(s) from period [$period] calendar [$objCalendarId]',
+        );
+      } else if (type == 'manifest') {
+        _log(
+          '_handleDeletedEvent: manifest deleted for calendar [$objCalendarId]; no local action taken',
+        );
+      } else {
+        _log(
+          '_handleDeletedEvent: unknown type [$type] for ${event.objectId}; skipping',
+        );
+      }
+    } catch (e) {
+      _log('_handleDeletedEvent: error processing ${event.objectId}: $e');
+    }
   }
 }
