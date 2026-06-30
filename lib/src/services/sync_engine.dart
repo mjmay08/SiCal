@@ -107,10 +107,18 @@ class SyncEngine {
           current: totalProcessed,
           total: 0,
         );
-        if (event.deleted) {
-          _handleDeletedEvent(event, calendarId: calendarId);
-        } else {
-          await _handlePinnedEvent(event, fallbackCalendarId: calendarId);
+        try {
+          if (event.deleted) {
+            _handleDeletedEvent(event, calendarId: calendarId);
+          } else {
+            await _handlePinnedEvent(event, fallbackCalendarId: calendarId);
+          }
+        } on FormatException catch (e) {
+          _log(
+            'pullChanges skipping event ${event.objectId} due to malformed data/metadata: $e',
+          );
+        } catch (e) {
+          _log('pullChanges event ${event.objectId} failed: $e');
         }
       }
 
@@ -355,7 +363,19 @@ class SyncEngine {
   }) async {
     if (event.metadataJson == null) return;
 
-    final meta = jsonDecode(event.metadataJson!) as Map<String, dynamic>;
+    late final Map<String, dynamic> meta;
+    try {
+      meta = jsonDecode(event.metadataJson!) as Map<String, dynamic>;
+    } on FormatException catch (e) {
+      final preview = event.metadataJson!.replaceAll('\n', ' ');
+      final snippet = preview.length > 160
+          ? '${preview.substring(0, 160)}...'
+          : preview;
+      _log(
+        '_handlePinnedEvent metadata parse failed for ${event.objectId}: $e; metadata="$snippet"',
+      );
+      return;
+    }
     final type = meta['type'] as String?;
     final calendarId = meta['calendar_id'] as String? ?? fallbackCalendarId;
 
@@ -399,7 +419,19 @@ class SyncEngine {
     } else if (type == 'manifest') {
       final (dataJson, _) = await _sia.downloadObject(event.objectId);
       // Calendar settings are in the object data.
-      final settings = jsonDecode(dataJson) as Map<String, dynamic>;
+      late final Map<String, dynamic> settings;
+      try {
+        settings = jsonDecode(dataJson) as Map<String, dynamic>;
+      } on FormatException catch (e) {
+        final preview = dataJson.replaceAll('\n', ' ');
+        final snippet = preview.length > 160
+            ? '${preview.substring(0, 160)}...'
+            : preview;
+        _log(
+          '_handlePinnedEvent manifest parse failed for ${event.objectId}: $e; data="$snippet"',
+        );
+        return;
+      }
       final manifestCalendarId =
           settings['calendar_id'] as String? ?? calendarId;
       // Chunk map is stored in the manifest data (new format) or Sia metadata
