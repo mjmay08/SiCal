@@ -61,11 +61,12 @@ class AppDatabase {
     ''');
     _db.execute('''
       CREATE TABLE IF NOT EXISTS chunks (
-        period TEXT PRIMARY KEY,
+        period TEXT NOT NULL,
         calendar_id TEXT NOT NULL DEFAULT 'default',
         object_id TEXT NOT NULL,
         version INTEGER NOT NULL DEFAULT 0,
-        last_synced_at TEXT NOT NULL
+        last_synced_at TEXT NOT NULL,
+        PRIMARY KEY (period, calendar_id)
       )
     ''');
     _db.execute('''
@@ -80,8 +81,7 @@ class AppDatabase {
     ''');
     _db.execute('''
       CREATE TABLE IF NOT EXISTS sync_state (
-        id INTEGER PRIMARY KEY DEFAULT 1,
-        calendar_id TEXT NOT NULL DEFAULT 'default',
+        calendar_id TEXT PRIMARY KEY,
         cursor TEXT NOT NULL DEFAULT '',
         cursor_id TEXT NOT NULL DEFAULT '',
         last_sync_at TEXT
@@ -105,6 +105,7 @@ class AppDatabase {
         "ALTER TABLE sync_state ADD COLUMN calendar_id TEXT NOT NULL DEFAULT 'default'",
       );
     }
+    _migrateSyncStateToCalendarPrimaryKey();
     _db.execute(
       'CREATE INDEX IF NOT EXISTS idx_events_period ON events(period)',
     );
@@ -143,6 +144,7 @@ class AppDatabase {
         "ALTER TABLE chunks ADD COLUMN calendar_id TEXT NOT NULL DEFAULT 'default'",
       );
     }
+    _migrateChunksToCompositePrimaryKey();
 
     final manifestCols = _db.select("PRAGMA table_info('manifest')");
     if (!manifestCols.any((r) => r['name'] == 'calendar_id')) {
@@ -257,6 +259,93 @@ class AppDatabase {
       ''');
       _db.execute('DROP TABLE manifest');
       _db.execute('ALTER TABLE manifest_new RENAME TO manifest');
+      _db.execute('COMMIT');
+    } catch (_) {
+      _db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  void _migrateSyncStateToCalendarPrimaryKey() {
+    final cols = _db.select("PRAGMA table_info('sync_state')");
+    final calendarPk = cols
+        .where((r) => r['name'] == 'calendar_id')
+        .map((r) => (r['pk'] as int?) ?? 0)
+        .fold<int>(0, (a, b) => a + b);
+    if (calendarPk > 0) return;
+
+    _db.execute('BEGIN');
+    try {
+      _db.execute('''
+        CREATE TABLE sync_state_new (
+          calendar_id TEXT PRIMARY KEY,
+          cursor TEXT NOT NULL DEFAULT '',
+          cursor_id TEXT NOT NULL DEFAULT '',
+          last_sync_at TEXT
+        )
+      ''');
+      _db.execute('''
+        INSERT OR REPLACE INTO sync_state_new
+        (calendar_id, cursor, cursor_id, last_sync_at)
+        SELECT
+          CASE
+            WHEN calendar_id IS NULL OR calendar_id = '' THEN 'default'
+            ELSE calendar_id
+          END,
+          cursor,
+          cursor_id,
+          last_sync_at
+        FROM sync_state
+      ''');
+      _db.execute('DROP TABLE sync_state');
+      _db.execute('ALTER TABLE sync_state_new RENAME TO sync_state');
+      _db.execute('COMMIT');
+    } catch (_) {
+      _db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  void _migrateChunksToCompositePrimaryKey() {
+    final cols = _db.select("PRAGMA table_info('chunks')");
+    final periodPk = cols
+        .where((r) => r['name'] == 'period')
+        .map((r) => (r['pk'] as int?) ?? 0)
+        .fold<int>(0, (a, b) => a + b);
+    final calendarPk = cols
+        .where((r) => r['name'] == 'calendar_id')
+        .map((r) => (r['pk'] as int?) ?? 0)
+        .fold<int>(0, (a, b) => a + b);
+    if (periodPk > 0 && calendarPk > 0) return;
+
+    _db.execute('BEGIN');
+    try {
+      _db.execute('''
+        CREATE TABLE chunks_new (
+          period TEXT NOT NULL,
+          calendar_id TEXT NOT NULL DEFAULT 'default',
+          object_id TEXT NOT NULL,
+          version INTEGER NOT NULL DEFAULT 0,
+          last_synced_at TEXT NOT NULL,
+          PRIMARY KEY (period, calendar_id)
+        )
+      ''');
+      _db.execute('''
+        INSERT OR REPLACE INTO chunks_new
+        (period, calendar_id, object_id, version, last_synced_at)
+        SELECT
+          period,
+          CASE
+            WHEN calendar_id IS NULL OR calendar_id = '' THEN 'default'
+            ELSE calendar_id
+          END,
+          object_id,
+          version,
+          last_synced_at
+        FROM chunks
+      ''');
+      _db.execute('DROP TABLE chunks');
+      _db.execute('ALTER TABLE chunks_new RENAME TO chunks');
       _db.execute('COMMIT');
     } catch (_) {
       _db.execute('ROLLBACK');
@@ -638,7 +727,7 @@ class AppDatabase {
 
   SyncStateRow? getSyncState({String? calendarId}) {
     final result = _db.select(
-      'SELECT * FROM sync_state WHERE id = 1 AND calendar_id = ?',
+      'SELECT * FROM sync_state WHERE calendar_id = ?',
       [calendarId ?? kDefaultCalendarId],
     );
     if (result.isEmpty) return null;
@@ -659,8 +748,8 @@ class AppDatabase {
     _db.execute(
       '''
       INSERT OR REPLACE INTO sync_state
-      (id, calendar_id, cursor, cursor_id, last_sync_at)
-      VALUES (1, ?, ?, ?, ?)
+      (calendar_id, cursor, cursor_id, last_sync_at)
+      VALUES (?, ?, ?, ?)
     ''',
       [targetCalendarId, cursor, cursorId, now],
     );
