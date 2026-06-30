@@ -489,6 +489,17 @@ class AppDatabase {
     );
   }
 
+  /// Permanently delete a single event row.
+  ///
+  /// Used during pull reconciliation when a remote chunk no longer contains
+  /// an event that still exists locally.
+  void hardDeleteEvent(String id, {String? calendarId}) {
+    _db.execute('DELETE FROM events WHERE id = ? AND calendar_id = ?', [
+      id,
+      calendarId ?? kDefaultCalendarId,
+    ]);
+  }
+
   /// Get all recurring master events whose series could produce instances
   /// within [from]..[to]. A master qualifies if its start <= [to] (the series
   /// may extend forward) and it has a recurrence rule.

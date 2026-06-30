@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,10 +13,7 @@ class _FakeSiaStorageService extends SiaStorageService {
   final Map<String, (String, String)> objectsById;
   int _pageIndex = 0;
 
-  _FakeSiaStorageService({
-    required this.pages,
-    this.objectsById = const {},
-  });
+  _FakeSiaStorageService({required this.pages, this.objectsById = const {}});
 
   @override
   Future<(List<SiaObjectEvent>, String, String, bool)> listObjects(
@@ -85,14 +83,10 @@ void main() {
     }
   });
 
-  group('Phase 1 regression guards', () {
+  group('Sync regression guards', () {
     test('sync_state keeps independent cursors per calendar', () {
       db.updateSyncCursor('cursor-default', 'cursor-id-default');
-      db.updateSyncCursor(
-        'cursor-work',
-        'cursor-id-work',
-        calendarId: 'work',
-      );
+      db.updateSyncCursor('cursor-work', 'cursor-id-work', calendarId: 'work');
 
       expect(
         db.getSyncState(calendarId: kDefaultCalendarId)?.cursor,
@@ -109,90 +103,167 @@ void main() {
         db.getChunk('2026-06', calendarId: kDefaultCalendarId)?['object_id'],
         'object-default',
       );
-      expect(db.getChunk('2026-06', calendarId: 'work')?['object_id'], 'object-work');
+      expect(
+        db.getChunk('2026-06', calendarId: 'work')?['object_id'],
+        'object-work',
+      );
     });
 
-    test('pullChanges deletes local period data when a remote chunk is deleted', () async {
-      const calendarId = kDefaultCalendarId;
-      const period = '2026-04';
+    test(
+      'pullChanges deletes local period data when a remote chunk is deleted',
+      () async {
+        const calendarId = kDefaultCalendarId;
+        const period = '2026-04';
 
-      db.upsertEvent(
-        _buildEvent(
-          id: 'event-a',
+        db.upsertEvent(
+          _buildEvent(
+            id: 'event-a',
+            calendarId: calendarId,
+            start: DateTime.utc(2026, 4, 12, 9),
+          ),
+        );
+        db.upsertChunk(period, 'chunk-old', 0, calendarId: calendarId);
+
+        final fakeSia = _FakeSiaStorageService(
+          pages: [
+            (
+              [
+                const SiaObjectEvent(
+                  objectId: 'chunk-old',
+                  deleted: true,
+                  metadataJson:
+                      '{"type":"chunk","period":"2026-04","calendar_id":"default"}',
+                ),
+              ],
+              'cursor-1',
+              'id-1',
+              false,
+            ),
+          ],
+        );
+
+        final engine = SyncEngine(db, fakeSia);
+        await engine.pullChanges(calendarId: calendarId);
+
+        expect(
+          db.getAllEventsForPeriod(period, calendarIds: [calendarId]),
+          isEmpty,
+        );
+        expect(db.getChunk(period, calendarId: calendarId), isNull);
+      },
+    );
+
+    test(
+      'pullChanges removes periods missing from latest manifest chunk map',
+      () async {
+        const calendarId = kDefaultCalendarId;
+        const period = '2026-04';
+        const manifestObjectId = 'manifest-new';
+
+        db.upsertEvent(
+          _buildEvent(
+            id: 'event-b',
+            calendarId: calendarId,
+            start: DateTime.utc(2026, 4, 13, 12),
+          ),
+        );
+        db.upsertChunk(period, 'chunk-old', 0, calendarId: calendarId);
+
+        final fakeSia = _FakeSiaStorageService(
+          pages: [
+            (
+              [
+                const SiaObjectEvent(
+                  objectId: manifestObjectId,
+                  deleted: false,
+                  metadataJson: '{"type":"manifest","calendar_id":"default"}',
+                ),
+              ],
+              'cursor-2',
+              'id-2',
+              false,
+            ),
+          ],
+          objectsById: const {
+            manifestObjectId: (
+              '{"calendar_name":"My Calendar","timezone":"UTC","color":"#1ED660","calendar_id":"default","chunks":{}}',
+              '{"type":"manifest","calendar_id":"default"}',
+            ),
+          },
+        );
+
+        final engine = SyncEngine(db, fakeSia);
+        await engine.pullChanges(calendarId: calendarId);
+
+        expect(
+          db.getAllEventsForPeriod(period, calendarIds: [calendarId]),
+          isEmpty,
+        );
+        expect(db.getChunk(period, calendarId: calendarId), isNull);
+      },
+    );
+
+    test(
+      'pullChanges removes local events missing from updated remote chunk',
+      () async {
+        const calendarId = kDefaultCalendarId;
+        const period = '2026-04';
+        const chunkObjectId = 'chunk-new';
+        final keptEvent = _buildEvent(
+          id: 'event-keep',
           calendarId: calendarId,
-          start: DateTime.utc(2026, 4, 12, 9),
-        ),
-      );
-      db.upsertChunk(period, 'chunk-old', 0, calendarId: calendarId);
+          start: DateTime.utc(2026, 4, 15, 10),
+        );
 
-      final fakeSia = _FakeSiaStorageService(
-        pages: [
-          (
-            [
-              const SiaObjectEvent(
-                objectId: 'chunk-old',
-                deleted: true,
-                metadataJson:
-                    '{"type":"chunk","period":"2026-04","calendar_id":"default"}',
-              ),
-            ],
-            'cursor-1',
-            'id-1',
-            false,
+        db.upsertEvent(keptEvent);
+        db.upsertEvent(
+          _buildEvent(
+            id: 'event-delete',
+            calendarId: calendarId,
+            start: DateTime.utc(2026, 4, 16, 10),
           ),
-        ],
-      );
+        );
+        db.markEventsClean(period, calendarId: calendarId);
+        db.upsertChunk(period, 'chunk-old', 0, calendarId: calendarId);
 
-      final engine = SyncEngine(db, fakeSia);
-      await engine.pullChanges(calendarId: calendarId);
+        final chunkJson = jsonEncode({
+          'period': period,
+          'events': [keptEvent.toJson()],
+        });
 
-      expect(db.getAllEventsForPeriod(period, calendarIds: [calendarId]), isEmpty);
-      expect(db.getChunk(period, calendarId: calendarId), isNull);
-    });
+        final fakeSia = _FakeSiaStorageService(
+          pages: [
+            (
+              [
+                const SiaObjectEvent(
+                  objectId: chunkObjectId,
+                  deleted: false,
+                  metadataJson:
+                      '{"type":"chunk","period":"2026-04","calendar_id":"default"}',
+                ),
+              ],
+              'cursor-3',
+              'id-3',
+              false,
+            ),
+          ],
+          objectsById: {
+            chunkObjectId: (
+              chunkJson,
+              '{"type":"chunk","period":"2026-04","calendar_id":"default"}',
+            ),
+          },
+        );
 
-    test('pullChanges removes periods missing from latest manifest chunk map', () async {
-      const calendarId = kDefaultCalendarId;
-      const period = '2026-04';
-      const manifestObjectId = 'manifest-new';
+        final engine = SyncEngine(db, fakeSia);
+        await engine.pullChanges(calendarId: calendarId);
 
-      db.upsertEvent(
-        _buildEvent(
-          id: 'event-b',
-          calendarId: calendarId,
-          start: DateTime.utc(2026, 4, 13, 12),
-        ),
-      );
-      db.upsertChunk(period, 'chunk-old', 0, calendarId: calendarId);
-
-      final fakeSia = _FakeSiaStorageService(
-        pages: [
-          (
-            [
-              const SiaObjectEvent(
-                objectId: manifestObjectId,
-                deleted: false,
-                metadataJson:
-                    '{"type":"manifest","calendar_id":"default"}',
-              ),
-            ],
-            'cursor-2',
-            'id-2',
-            false,
-          ),
-        ],
-        objectsById: const {
-          manifestObjectId: (
-            '{"calendar_name":"My Calendar","timezone":"UTC","color":"#1ED660","calendar_id":"default","chunks":{}}',
-            '{"type":"manifest","calendar_id":"default"}',
-          ),
-        },
-      );
-
-      final engine = SyncEngine(db, fakeSia);
-      await engine.pullChanges(calendarId: calendarId);
-
-      expect(db.getAllEventsForPeriod(period, calendarIds: [calendarId]), isEmpty);
-      expect(db.getChunk(period, calendarId: calendarId), isNull);
-    });
+        final events = db.getAllEventsForPeriod(
+          period,
+          calendarIds: [calendarId],
+        );
+        expect(events.map((e) => e.id).toSet(), {'event-keep'});
+      },
+    );
   });
 }

@@ -364,12 +364,38 @@ class SyncEngine {
       final (dataJson, _) = await _sia.downloadObject(event.objectId);
       final chunk = Chunk.decode(dataJson);
 
+      // Reconcile local rows when an existing period chunk is replaced:
+      // events missing from the new chunk should be removed locally.
+      final incomingIds = chunk.events.map((e) => e.id).toSet();
+      final localEvents = _db.getAllEventsForPeriod(
+        period,
+        calendarIds: [calendarId],
+      );
+      var removedCount = 0;
+      for (final local in localEvents) {
+        if (!incomingIds.contains(local.id)) {
+          if (local.isDirty) {
+            _log(
+              '_handlePinnedEvent: keeping dirty local event [${local.id}] missing from remote chunk [$period]',
+            );
+            continue;
+          }
+          _db.hardDeleteEvent(local.id, calendarId: calendarId);
+          removedCount++;
+        }
+      }
+
       for (final calEvent in chunk.events) {
         _db.upsertRemoteEvent(
           calEvent.copyWith(calendarId: calendarId, isDirty: false),
         );
       }
       _db.upsertChunk(period, event.objectId, 0, calendarId: calendarId);
+      if (removedCount > 0) {
+        _log(
+          '_handlePinnedEvent: removed $removedCount stale event(s) for period [$period] calendar [$calendarId]',
+        );
+      }
     } else if (type == 'manifest') {
       final (dataJson, _) = await _sia.downloadObject(event.objectId);
       // Calendar settings are in the object data.
