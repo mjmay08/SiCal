@@ -933,6 +933,9 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen>
     if (syncError) return;
 
     progress.reset();
+    ref.invalidate(calendarsProvider);
+    ref.invalidate(visibleCalendarIdsProvider);
+    ref.invalidate(calendarLookupProvider);
     ref.invalidate(eventsForDayProvider);
     _loadVisibleEvents();
     if (!silent && mounted) {

@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sical/src/database/database.dart';
+import 'package:sical/src/models/calendar.dart';
 import 'package:sical/src/models/event.dart';
 import 'package:sical/src/services/sia_storage_service.dart';
 import 'package:sical/src/services/sync_engine.dart';
@@ -33,6 +34,26 @@ class _FakeSiaStorageService extends SiaStorageService {
       throw StateError('No fake object registered for $objectId');
     }
     return payload;
+  }
+}
+
+class _RecordingSiaStorageService extends SiaStorageService {
+  final List<PackedUpload> packedUploads = [];
+  final List<String> manifestPayloads = [];
+
+  @override
+  Future<List<String>> uploadPacked(List<PackedUpload> items) async {
+    packedUploads.addAll(items);
+    return List<String>.generate(items.length, (i) => 'chunk-upload-$i');
+  }
+
+  @override
+  Future<String> uploadManifest(
+    String manifestJson, {
+    String? calendarId,
+  }) async {
+    manifestPayloads.add(manifestJson);
+    return 'manifest-uploaded';
   }
 }
 
@@ -239,6 +260,48 @@ void main() {
       expect(calendar?.timezone, 'America/New_York');
       expect(calendar?.color, '#3366FF');
     });
+
+    test(
+      'pushChanges uses calendar metadata when manifest row is missing',
+      () async {
+        const calendarId = 'work';
+        final now = DateTime.now().toUtc();
+
+        db.upsertCalendar(
+          CalendarInfo(
+            id: calendarId,
+            name: 'Work',
+            timezone: 'America/New_York',
+            color: '#3366FF',
+            isVisible: true,
+            sortOrder: 1,
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+
+        db.upsertEvent(
+          _buildEvent(
+            id: 'event-work',
+            calendarId: calendarId,
+            start: DateTime.utc(2026, 4, 20, 9),
+          ),
+        );
+
+        final fakeSia = _RecordingSiaStorageService();
+        final engine = SyncEngine(db, fakeSia);
+
+        await engine.pushChanges(calendarId: calendarId);
+
+        expect(fakeSia.manifestPayloads, hasLength(1));
+        final manifest =
+            jsonDecode(fakeSia.manifestPayloads.first) as Map<String, dynamic>;
+        expect(manifest['calendar_name'], 'Work');
+        expect(manifest['timezone'], 'America/New_York');
+        expect(manifest['color'], '#3366FF');
+        expect(manifest['calendar_id'], calendarId);
+      },
+    );
 
     test(
       'pullChanges removes local events missing from updated remote chunk',
