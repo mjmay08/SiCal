@@ -153,6 +153,12 @@ class SyncEngine {
     );
 
     final manifest = _db.getManifest(calendarId: calendarId);
+    final calendarInfo = _db.getCalendarById(calendarId);
+    final manifestCalendarName =
+        manifest?.calendarName ?? calendarInfo?.name ?? 'My Calendar';
+    final manifestTimezone =
+        manifest?.timezone ?? calendarInfo?.timezone ?? 'UTC';
+    final manifestColor = manifest?.color ?? calendarInfo?.color ?? '#1ED660';
 
     // Collect ALL old object IDs (every chunk + manifest) so we can delete
     // them after uploading the new slab.
@@ -290,9 +296,9 @@ class SyncEngine {
       message: 'Uploading manifest...',
     );
     final manifestData = jsonEncode({
-      'calendar_name': manifest?.calendarName ?? 'My Calendar',
-      'timezone': manifest?.timezone ?? 'UTC',
-      'color': manifest?.color ?? '#1ED660',
+      'calendar_name': manifestCalendarName,
+      'timezone': manifestTimezone,
+      'color': manifestColor,
       'calendar_id': calendarId,
       'updated_at': DateTime.now().toUtc().toIso8601String(),
       'chunks': chunks,
@@ -322,7 +328,13 @@ class SyncEngine {
       'pushChanges manifest uploaded → ${manifestObjectId.substring(0, 12)}…',
     );
 
-    _db.upsertManifest(calendarId: calendarId, objectId: manifestObjectId);
+    _db.upsertManifest(
+      calendarId: calendarId,
+      objectId: manifestObjectId,
+      calendarName: manifestCalendarName,
+      timezone: manifestTimezone,
+      color: manifestColor,
+    );
 
     // Upload succeeded — now safe to mark dirty periods as clean.
     // This physically removes soft-deleted rows and clears the is_dirty flag.
