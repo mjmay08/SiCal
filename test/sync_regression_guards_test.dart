@@ -203,6 +203,43 @@ void main() {
       },
     );
 
+    test('pullChanges creates local calendar for non-default manifest', () async {
+      const calendarId = 'work';
+      const manifestObjectId = 'manifest-work';
+
+      final fakeSia = _FakeSiaStorageService(
+        pages: [
+          (
+            [
+              const SiaObjectEvent(
+                objectId: manifestObjectId,
+                deleted: false,
+                metadataJson: '{"type":"manifest","calendar_id":"work"}',
+              ),
+            ],
+            'cursor-2b',
+            'id-2b',
+            false,
+          ),
+        ],
+        objectsById: const {
+          manifestObjectId: (
+            '{"calendar_name":"Work","timezone":"America/New_York","color":"#3366FF","calendar_id":"work","chunks":{}}',
+            '{"type":"manifest","calendar_id":"work"}',
+          ),
+        },
+      );
+
+      final engine = SyncEngine(db, fakeSia);
+      await engine.pullChanges(calendarId: calendarId);
+
+      final calendar = db.getCalendarById(calendarId);
+      expect(calendar, isNotNull);
+      expect(calendar?.name, 'Work');
+      expect(calendar?.timezone, 'America/New_York');
+      expect(calendar?.color, '#3366FF');
+    });
+
     test(
       'pullChanges removes local events missing from updated remote chunk',
       () async {

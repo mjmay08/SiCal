@@ -718,18 +718,32 @@ class AppDatabase {
       }
     }
 
-    if (targetCalendarId == kDefaultCalendarId) {
-      final existingCalendar = getCalendarById(kDefaultCalendarId);
-      if (existingCalendar != null) {
-        upsertCalendar(
-          existingCalendar.copyWith(
-            name: calendarName ?? existingCalendar.name,
-            timezone: timezone ?? existingCalendar.timezone,
-            color: color ?? existingCalendar.color,
-          ),
-        );
-      }
+    final existingCalendar = getCalendarById(targetCalendarId);
+    final now = DateTime.now().toUtc();
+    if (existingCalendar != null) {
+      upsertCalendar(
+        existingCalendar.copyWith(
+          name: calendarName ?? existingCalendar.name,
+          timezone: timezone ?? existingCalendar.timezone,
+          color: color ?? existingCalendar.color,
+          updatedAt: now,
+        ),
+      );
+      return;
     }
+
+    upsertCalendar(
+      CalendarInfo(
+        id: targetCalendarId,
+        name: calendarName ?? 'My Calendar',
+        timezone: timezone ?? 'UTC',
+        color: color ?? '#1ED660',
+        isVisible: true,
+        sortOrder: getCalendars().length,
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
   }
 
   // -----------------------------------------------------------------------
